@@ -320,7 +320,7 @@
             $("#modalTitle").text("Analyzing Data...");
             $("#modalSub").text("Securely Processing in RAM..."); // <--- UPDATED INFO
 
-            fetch("http://127.0.0.1:8000/predict?report_type=" + reportType + "&enable_cleansing=" + isClean, { method: "POST", body: formData })
+            fetch("/predict?report_type=" + reportType + "&enable_cleansing=" + isClean, { method: "POST", body: formData })
             .then(res => { if(!res.ok) throw new Error("Server Error"); return res.blob(); })
             .then(blob => {
                 $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
@@ -357,12 +357,12 @@
             $("#modalSub").text("Initializing...");
 
             // 1. Trigger Start
-            fetch("http://127.0.0.1:8000/train?enable_cleansing=" + isClean, { method: "POST", body: formData })
+            fetch("/train?enable_cleansing=" + isClean, { method: "POST", body: formData })
             .then(response => {
                 if(response.ok) {
                     // 2. Poll Status Invisibly
                     var poller = setInterval(function() {
-                        fetch("http://127.0.0.1:8000/train/status")
+                        fetch("train/status")
                         .then(r => r.json())
                         .then(data => {
                             // Update Status Text Real-time
