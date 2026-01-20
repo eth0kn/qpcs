@@ -37,7 +37,7 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
 # ==============================================================================
 # 2. SERVER CONFIGURATION
 # ==============================================================================
-app = FastAPI(title="QPCS AI System API", version="11.0 (Exact Layout Match)")
+app = FastAPI(title="QPCS AI System API", version="12.0 (Precision Layout Fix)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -100,10 +100,11 @@ def filter_output_columns(df, input_col_name):
         df_clean['PROC_DETAIL_E'] = df[input_col_name]
     return df_clean
 
-# --- UPDATED: EXCEL STYLING FUNCTION (Support Layout Adjustment) ---
-def apply_excel_styling(ws, report_type, header_row_num):
+# --- UPDATED STYLING FUNCTION (Aware of Column Start) ---
+def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
     """
-    Apply styling considering the shifted header row.
+    Apply styling strictly to the table area, ignoring empty margins.
+    start_col_idx: 1-based index (e.g., 1 for Col A, 2 for Col B)
     """
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid") # Indigo Header
@@ -116,39 +117,49 @@ def apply_excel_styling(ws, report_type, header_row_num):
 
     svc_col_index = None
 
-    # 1. Format Header Row (Dynamic Row Number)
-    for cell in ws[header_row_num]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = thin_border
-        
-        if report_type == 'monthly' and str(cell.value).strip() == 'SVC TYPE':
-            svc_col_index = cell.column
+    # 1. Format Header Row (Only iterate columns with data)
+    # Gunakan iter_rows dengan min_col agar kolom kosong di kiri (margin) tidak diwarnai
+    for row in ws.iter_rows(min_row=header_row_num, max_row=header_row_num, min_col=start_col_idx):
+        for cell in row:
+            if cell.value: # Hanya style jika ada isi
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = thin_border
+                
+                if report_type == 'monthly' and str(cell.value).strip() == 'SVC TYPE':
+                    svc_col_index = cell.column
 
     # 2. Format Data Rows (Start from Header + 1)
-    for row in ws.iter_rows(min_row=header_row_num + 1):
+    for row in ws.iter_rows(min_row=header_row_num + 1, min_col=start_col_idx):
         for cell in row:
-            cell.border = thin_border
-            cell.alignment = Alignment(vertical="center")
-            
-            # Conditional Formatting
-            if report_type == 'monthly' and svc_col_index and cell.column == svc_col_index:
-                val = str(cell.value).strip().upper()
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            # Pastikan hanya mewarnai jika di dalam area tabel (ada header di atasnya)
+            # Kita cek apakah cell ini sejajar dengan kolom yang memiliki header
+            if ws.cell(row=header_row_num, column=cell.column).value: 
+                cell.border = thin_border
+                cell.alignment = Alignment(vertical="center")
                 
-                if val == 'OZ':
-                    cell.fill = fill_oz
-                    cell.font = Font(color="006100")
-                elif val == 'IH':
-                    cell.fill = fill_ih
-                    cell.font = Font(color="9C0006")
-                elif val == 'MS':
-                    cell.fill = fill_ms
-                    cell.font = Font(color="9C6500")
+                # Conditional Formatting
+                if report_type == 'monthly' and svc_col_index and cell.column == svc_col_index:
+                    val = str(cell.value).strip().upper()
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    
+                    if val == 'OZ':
+                        cell.fill = fill_oz
+                        cell.font = Font(color="006100")
+                    elif val == 'IH':
+                        cell.fill = fill_ih
+                        cell.font = Font(color="9C0006")
+                    elif val == 'MS':
+                        cell.fill = fill_ms
+                        cell.font = Font(color="9C6500")
 
     # 3. Auto-Adjust Width
     for column in ws.columns:
+        # Skip kolom sebelum start_col_idx (misal Col A di Daily)
+        if column[0].column < start_col_idx:
+            continue
+
         max_length = 0
         column_letter = get_column_letter(column[0].column)
         for cell in column:
@@ -202,9 +213,10 @@ async def predict_excel(
             
             # Layout Config
             sheet_name = 'Defect Classification'
-            start_row = 2 # Excel Row 3 (Index 2 di Python pandas)
+            start_row = 2   # Row 3 (Index 2)
+            start_col = 1   # Col B (Index 1) -> INI PERUBAHAN UTAMA
             header_title = "DEFECT CLASSIFICATION (DAILY 1X PER DAY)"
-            header_cell = "B2" # Biasanya agak menjorok
+            header_cell = "B2"
             
         elif report_type == 'monthly':
             # Logic Prediksi
@@ -226,31 +238,26 @@ async def predict_excel(
             
             # Layout Config
             sheet_name = 'OZ,MS,IH CATEGORY'
-            start_row = 1 # Excel Row 2 (Index 1 di Python pandas)
+            start_row = 1   # Row 2 (Index 1)
+            start_col = 0   # Col A (Index 0)
             header_title = "OZ/MS/IH CATEGORY (MONTHLY 1X PER MONTH)"
             header_cell = "A1"
 
         # --- EXPORT & STYLING ---
         output_buffer = io.BytesIO()
         with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
-            # 1. Write Data (Geser ke bawah sesuai start_row)
-            df_final.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row)
+            # 1. Write Data (Start Row + Start Col)
+            df_final.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=start_col)
             
             worksheet = writer.sheets[sheet_name]
             
             # 2. Insert Title Manually
             title_font = Font(bold=True, size=12)
-            if report_type == 'daily':
-                # Daily Title di Row 2 (Excel)
-                worksheet['B2'] = header_title
-                worksheet['B2'].font = title_font
-            else:
-                # Monthly Title di Row 1 (Excel)
-                worksheet['A1'] = header_title
-                worksheet['A1'].font = title_font
+            worksheet[header_cell] = header_title
+            worksheet[header_cell].font = title_font
             
-            # 3. Apply Table Styling (Header Row = start_row + 1 karena Excel 1-based)
-            apply_excel_styling(worksheet, report_type, header_row_num=(start_row + 1))
+            # 3. Apply Table Styling (Kirim start_col + 1 agar jadi 1-based index untuk openpyxl)
+            apply_excel_styling(worksheet, report_type, header_row_num=(start_row + 1), start_col_idx=(start_col + 1))
         
         output_buffer.seek(0)
         prefix = "DAILY_" if report_type == 'daily' else "MONTHLY_"
@@ -267,7 +274,7 @@ async def predict_excel(
         raise HTTPException(500, f"Server Error: {str(e)}")
 
 # ==============================================================================
-# 5. TRAINING LOGIC
+# 5. TRAINING LOGIC (Sama seperti sebelumnya)
 # ==============================================================================
 def run_training_process(clean_bool):
     global TRAINING_STATE
