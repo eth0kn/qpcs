@@ -16,7 +16,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 DATASET_PATH = 'datasets/training_data.xlsx'
 MODEL_DIR = 'models/'
 os.makedirs(MODEL_DIR, exist_ok=True)
-MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2' 
+MODEL_NAME = 'BAAI/bge-m3' 
 
 # --- KONFIGURASI NAMA SHEET BARU ---
 SHEET_DAILY = "PROCESS (DEFECT)"      # Header biasanya di row 2 (index 2)
