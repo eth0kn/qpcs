@@ -18,12 +18,16 @@ MODEL_DIR = 'models/'
 os.makedirs(MODEL_DIR, exist_ok=True)
 MODEL_NAME = 'BAAI/bge-m3' 
 
-# --- KONFIGURASI NAMA SHEET BARU ---
-SHEET_DAILY = "PROCESS (DEFECT)"      # Header biasanya di row 2 (index 2)
-SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"  # Header biasanya di row 1 (index 1)
+# --- KONFIGURASI SHEET & HEADER (DISESUAIKAN DENGAN FILE ANDA) ---
+SHEET_DAILY = "PROCESS (DEFECT)"
+SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
+
+# PENTING: Header di file Anda ada di Row 2 (Index 1 di Python)
+# Row 1 adalah Judul, Row 2 adalah Header Kolom
+HEADER_INDEX = 1 
 
 # ==============================================================================
-# AI EMBEDDER (MUST MATCH main.py EXACTLY)
+# AI EMBEDDER
 # ==============================================================================
 class BertEmbedder(BaseEstimator, TransformerMixin):
     def __init__(self, model_name):
@@ -62,7 +66,7 @@ def is_valid_training_row(text):
     return True
 
 # ==============================================================================
-# MAIN TRAINING LOGIC (SMART SHEET DETECTION)
+# MAIN TRAINING LOGIC
 # ==============================================================================
 def train_ai_advanced(enable_cleansing=True, progress_callback=None):
     def report(p, msg):
@@ -76,7 +80,7 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
         report(0, "Error: Dataset file not found.")
         return
 
-    # --- STEP 1: INSPECT SHEETS (SMART CHECK) ---
+    # --- STEP 1: INSPECT SHEETS ---
     report(10, "Inspecting Excel Sheets...")
     try:
         xls = pd.ExcelFile(DATASET_PATH, engine='openpyxl')
@@ -86,36 +90,46 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
         report(0, f"Error reading Excel file: {str(e)}")
         return
 
-    # Flags untuk menentukan apa yang akan ditraining
     has_daily = SHEET_DAILY in available_sheets
     has_monthly = SHEET_MONTHLY in available_sheets
     
     df_daily = None
     df_monthly = None
 
-    # --- STEP 2: LOAD DATA BASED ON AVAILABILITY ---
+    # --- STEP 2: LOAD DATA (CORRECTED HEADER POSITION) ---
     report(20, "Loading relevant data...")
     
     try:
         if has_daily:
-            # Header=2 karena biasanya ada 2 baris judul di atas
-            df_daily = pd.read_excel(xls, sheet_name=SHEET_DAILY, header=2)
+            # FIX: Header di baris ke-2 (Index 1), bukan 2
+            df_daily = pd.read_excel(xls, sheet_name=SHEET_DAILY, header=HEADER_INDEX)
+            # Membersihkan nama kolom dari spasi berlebih (jaga-jaga)
+            df_daily.columns = df_daily.columns.str.strip()
             report(25, f"-> Loaded Daily Data: {len(df_daily)} rows")
         
         if has_monthly:
-            # Header=1 karena biasanya ada 1 baris judul di atas
-            df_monthly = pd.read_excel(xls, sheet_name=SHEET_MONTHLY, header=1)
+            # FIX: Header di baris ke-2 (Index 1)
+            df_monthly = pd.read_excel(xls, sheet_name=SHEET_MONTHLY, header=HEADER_INDEX)
+            df_monthly.columns = df_monthly.columns.str.strip()
             report(25, f"-> Loaded Monthly Data: {len(df_monthly)} rows")
 
     except Exception as e:
-        report(0, f"Error loading sheet data: {str(e)}")
+        report(0, f"Error loading sheet data. Check Header/Column names: {str(e)}")
         return
 
     # --- STEP 3: PREPARE DATASETS ---
     input_col = 'PROC_DETAIL_E'
+    
+    # Validasi Kolom Kritis (Error Checking)
+    if has_daily and input_col not in df_daily.columns:
+        report(0, f"Error: Column '{input_col}' not found in Daily Sheet. Found: {list(df_daily.columns)}")
+        return
+    if has_monthly and input_col not in df_monthly.columns:
+        report(0, f"Error: Column '{input_col}' not found in Monthly Sheet. Found: {list(df_monthly.columns)}")
+        return
+
     rf_params = {'n_estimators': 200, 'n_jobs': -1, 'random_state': 42}
     
-    # Fungsi Helper Pembersih DataFrame
     def process_dataframe(df):
         df[input_col] = df[input_col].fillna("").astype(str)
         if enable_cleansing:
@@ -126,35 +140,46 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
             df['valid'] = True
         return df[df['valid'] == True].copy().fillna('unknown')
 
-    # --- LOGIC BRANCHING (INTI PERUBAHAN) ---
+    # --- LOGIC BRANCHING ---
     
-    # Skenario A: Training DEFECT Model (Jalan jika Daily ada ATAU Keduanya ada)
-    # Catatan: Jika hanya Monthly, user minta "hanya training monthly", jadi Defect skip.
+    # Skenario A: Training DEFECT Model (Daily OR Both)
     run_defect_training = False
     df_defect_final = pd.DataFrame()
 
     if has_daily and has_monthly:
-        report(30, "Mode: HYBRID (Daily + Monthly found). Merging data for Defect Model.")
+        report(30, "Mode: HYBRID (Daily + Monthly). Merging for Defect Model.")
         cols_defect = [input_col, 'Defect1', 'Defect2', 'Defect3']
-        # Gabung data agar model Defect makin pintar
-        df_defect_final = pd.concat([df_daily[cols_defect], df_monthly[cols_defect]], ignore_index=True)
-        run_defect_training = True
-        
+        # Pastikan kolom ada sebelum concat
+        try:
+            df_defect_final = pd.concat([df_daily[cols_defect], df_monthly[cols_defect]], ignore_index=True)
+            run_defect_training = True
+        except KeyError as e:
+             report(0, f"Error: Missing columns for Defect Model: {e}")
+             return
+
     elif has_daily:
-        report(30, "Mode: DAILY ONLY. Training Defect Model only.")
+        report(30, "Mode: DAILY ONLY. Training Defect Model.")
         cols_defect = [input_col, 'Defect1', 'Defect2', 'Defect3']
-        df_defect_final = df_daily[cols_defect].copy()
-        run_defect_training = True
+        try:
+            df_defect_final = df_daily[cols_defect].copy()
+            run_defect_training = True
+        except KeyError as e:
+             report(0, f"Error: Missing columns in Daily Sheet: {e}")
+             return
         
-    # Skenario B: Training OZ/Category Model (Jalan jika Monthly ada)
+    # Skenario B: Training OZ/Category Model (Monthly Only)
     run_oz_training = False
     df_oz_final = pd.DataFrame()
 
     if has_monthly:
-        if not has_daily: report(30, "Mode: MONTHLY ONLY. Training Category Model only.")
+        if not has_daily: report(30, "Mode: MONTHLY ONLY. Training Category Model.")
         cols_cat = [input_col, 'SVC TYPE', 'DETAIL REASON']
-        df_oz_final = df_monthly[cols_cat].copy()
-        run_oz_training = True
+        try:
+            df_oz_final = df_monthly[cols_cat].copy()
+            run_oz_training = True
+        except KeyError as e:
+             report(0, f"Error: Missing columns in Monthly Sheet: {e}")
+             return
 
     # --- STEP 4: EXECUTE TRAINING ---
     
@@ -176,7 +201,7 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
         else:
             report(50, "Warning: No valid data for Defect Model. Skipping.")
     else:
-        report(40, "Skipping Defect Model Training (Daily sheet not found).")
+        report(40, "Skipping Defect Model Training.")
 
     # 2. TRAIN OZ MODEL
     if run_oz_training:
@@ -196,14 +221,11 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
         else:
             report(80, "Warning: No valid data for Category Model. Skipping.")
     else:
-        report(70, "Skipping Category Model Training (Monthly sheet not found).")
+        report(70, "Skipping Category Model Training.")
 
     # --- FINISH ---
     report(100, "Process Complete.")
 
-# ==============================================================================
-# CLI HANDLER
-# ==============================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--clean', action='store_true')
