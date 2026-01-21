@@ -23,10 +23,9 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         if self.model is None: self.model = SentenceTransformer(self.model_name)
         if hasattr(X, 'tolist'): sentences = X.tolist()
         else: sentences = X
-        # BATCH SIZE 64 (Optimasi RAM)
         return self.model.encode(sentences, batch_size=64, show_progress_bar=False)
 
-app = FastAPI(title="QPCS AI System API", version="20.0 (Final Golden Copy)")
+app = FastAPI(title="QPCS AI System API", version="21.0 (Critical Fix)")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 MODEL_DIR = 'models/'
@@ -43,9 +42,9 @@ def load_system_resources():
         if os.path.exists(MODEL_DEFECT_PATH) and os.path.exists(MODEL_OZ_PATH):
             ai_models['defect'] = joblib.load(MODEL_DEFECT_PATH)
             ai_models['oz'] = joblib.load(MODEL_OZ_PATH)
-            print("   ✅ AI Models: LOADED")
+            print("   ✅ AI Models: LOADED SUCCESS")
         else:
-            print("   ⚠️ AI Models: NOT FOUND.")
+            print("   ⚠️ AI Models: NOT FOUND (Please Train First)")
     except Exception as e:
         print(f"   ❌ AI Models Error: {e}")
 
@@ -67,29 +66,36 @@ def is_valid_text(text):
     if not s or s.lower() in ["nan", "null"]: return False
     return True
 
-# --- FITUR BARU: AUTO DETECT HEADER ---
 def load_dataset_auto_header(file_contents):
+    """Smart Header Detection"""
     try:
         temp_df = pd.read_excel(io.BytesIO(file_contents), header=None, nrows=10, engine='openpyxl')
         header_idx = 0
         keywords = ['DATA_TYPE', 'PROC_DETAIL_E', 'SERIAL_NO', 'PARTS_DESC1', 'CLOSE_DT_RTN_DT']
         for idx, row in temp_df.iterrows():
             row_str = [str(val).strip().upper() for val in row.values]
-            # Jika baris ini mengandung minimal 2 keyword, ini HEADER
             if sum(1 for k in keywords if k in row_str) >= 2:
                 header_idx = idx
+                print(f"   ℹ️ Header found at Row {idx+1}")
                 break
         return pd.read_excel(io.BytesIO(file_contents), header=header_idx, engine='openpyxl')
     except: 
+        print("   ⚠️ Header detection failed, using default.")
         return pd.read_excel(io.BytesIO(file_contents), header=0, engine='openpyxl')
 
+# --- FIX BUG FATAL DI SINI ---
 def filter_output_columns(df, input_col_name):
     required_cols = ['DATA_TYPE', 'RCPT_NO_ORD_NO', 'CLOSE_DT_RTN_DT', 'SALES_MODEL_SUFFIX', 'SERIAL_NO', 'PARTS_DESC1', 'PARTS_DESC2', 'PARTS_DESC3', 'PROC_DETAIL_E', 'ASC_REMARK_E']
     df_clean = pd.DataFrame()
+    
+    # 1. Copy kolom wajib (isi kosong jika tidak ada)
     for col in required_cols:
         df_clean[col] = df[col] if col in df.columns else ""
-    if 'PROC_DETAIL_E' not in df_clean.columns and input_col_name in df.columns:
+    
+    # 2. CRITICAL FIX: Paksa isi PROC_DETAIL_E dari kolom input yang terdeteksi
+    if input_col_name in df.columns:
         df_clean['PROC_DETAIL_E'] = df[input_col_name]
+    
     return df_clean
 
 def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
@@ -117,7 +123,7 @@ def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
                     if val == 'OZ': cell.fill = fill_oz; cell.font = Font(color="006100")
                     elif val == 'IH': cell.fill = fill_ih; cell.font = Font(color="9C0006")
                     elif val == 'MS': cell.fill = fill_ms; cell.font = Font(color="9C6500")
-    
+
     for column in ws.columns:
         if column[0].column < start_col_idx: continue
         max_length = 0
@@ -136,46 +142,59 @@ def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
 async def predict_excel(
     file: UploadFile = File(...),
     report_type: str = Query(..., description="'daily' or 'monthly'"),
-    enable_cleansing: bool = Query(False) # SUDAH DIGANTI JADI FALSE
+    enable_cleansing: bool = Query(False)
 ):
     if not file.filename.endswith(('.xlsx', '.xls')): raise HTTPException(400, "Invalid file format.")
     try:
         contents = await file.read()
-        
-        # 1. AUTO DETECT HEADER (Kunci Anti-Failed)
         df_raw = load_dataset_auto_header(contents)
         
+        # 1. Deteksi Kolom Input (Text)
         input_col = 'PROC_DETAIL_E'
         if input_col not in df_raw.columns:
              candidates = [c for c in df_raw.columns if 'detail' in str(c).lower()]
              if candidates: input_col = candidates[0]
         
+        # 2. Filter & Copy Data (Sekarang sudah FIX)
         df_final = filter_output_columns(df_raw, input_col)
         
+        # 3. Validasi & Cleaning
         X_temp = df_final['PROC_DETAIL_E'].fillna("").astype(str)
         if enable_cleansing: X_temp = X_temp.apply(clean_text_deep)
         
         valid_mask = X_temp.apply(is_valid_text)
         X_pred = X_temp[valid_mask].tolist()
 
+        # 4. Auto-Reload Model jika hilang (Safety Net)
+        if 'defect' not in ai_models: load_system_resources()
+
+        # 5. Predict
         if report_type == 'daily':
             df_final['Defect1'] = "-"; df_final['Defect2'] = "-"; df_final['Defect3'] = "-"
+            
             if len(X_pred) > 0 and 'defect' in ai_models:
+                 print(f"   Processing {len(X_pred)} rows for Defect Model...")
                  pred_def = ai_models['defect'].predict(X_pred)
                  df_final.loc[valid_mask, 'Defect1'] = pred_def[:, 0]
                  df_final.loc[valid_mask, 'Defect2'] = pred_def[:, 1]
                  df_final.loc[valid_mask, 'Defect3'] = pred_def[:, 2]
+            else:
+                 print("   ⚠️ No valid data or model missing for Daily Report.")
+
             sheet_name = 'Defect Classification'; start_row = 2; start_col = 1; header_cell = "B2"; header_title = "DEFECT CLASSIFICATION (DAILY 1X PER DAY)"
         
         elif report_type == 'monthly':
             df_final['Defect1'] = "-"; df_final['Defect2'] = "-"; df_final['Defect3'] = "-"; df_final['SVC TYPE'] = "-"; df_final['DETAIL REASON'] = "-"
+            
             if len(X_pred) > 0:
+                print(f"   Processing {len(X_pred)} rows for Monthly Model...")
                 if 'defect' in ai_models:
                     pred_def = ai_models['defect'].predict(X_pred)
                     df_final.loc[valid_mask, 'Defect1'] = pred_def[:, 0]; df_final.loc[valid_mask, 'Defect2'] = pred_def[:, 1]; df_final.loc[valid_mask, 'Defect3'] = pred_def[:, 2]
                 if 'oz' in ai_models:
                     pred_oz = ai_models['oz'].predict(X_pred)
                     df_final.loc[valid_mask, 'SVC TYPE'] = pred_oz[:, 0]; df_final.loc[valid_mask, 'DETAIL REASON'] = pred_oz[:, 1]
+            
             sheet_name = 'OZ,MS,IH CATEGORY'; start_row = 1; start_col = 0; header_cell = "A1"; header_title = "OZ/MS/IH CATEGORY (MONTHLY 1X PER MONTH)"
 
         output_buffer = io.BytesIO()
@@ -192,7 +211,7 @@ async def predict_excel(
         return StreamingResponse(output_buffer, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Server Error: {e}")
         raise HTTPException(500, f"Server Error: {str(e)}")
 
 def run_training_process(clean_bool):
@@ -210,7 +229,7 @@ def run_training_process(clean_bool):
         TRAINING_STATE["is_running"] = False
 
 @app.post("/train")
-async def start_training(file: UploadFile = File(...), enable_cleansing: bool = Query(False)): # SUDAH DIGANTI JADI FALSE
+async def start_training(file: UploadFile = File(...), enable_cleansing: bool = Query(False)): 
     global TRAINING_STATE
     if TRAINING_STATE["is_running"]: raise HTTPException(400, "Training in progress.")
     os.makedirs(DATASET_DIR, exist_ok=True)
