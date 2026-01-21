@@ -20,7 +20,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 # AI EMBEDDER CLASS (Untuk Load Model saat Prediksi)
 # ==============================================================================
 class BertEmbedder(BaseEstimator, TransformerMixin):
-    # Constructor disesuaikan agar kompatibel dengan training_script
+    # Constructor kompatibel dengan training_script
     def __init__(self, model_name, progress_callback=None, start_pct=0, end_pct=0):
         self.model_name = model_name
         self.model = None
@@ -30,10 +30,13 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         if self.model is None: self.model = SentenceTransformer(self.model_name)
         if hasattr(X, 'tolist'): sentences = X.tolist()
         else: sentences = X
-        # Batch size 64
+        # Batch size 64 aman untuk 16GB RAM
         return self.model.encode(sentences, batch_size=64, show_progress_bar=False)
 
-app = FastAPI(title="QPCS AI System API", version="18.0")
+# ==============================================================================
+# SERVER CONFIG
+# ==============================================================================
+app = FastAPI(title="QPCS AI System API", version="20.0 (Final Golden Copy)")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 MODEL_DIR = 'models/'
@@ -44,7 +47,6 @@ MODEL_OZ_PATH = os.path.join(MODEL_DIR, 'model_oz.pkl')
 ai_models = {}
 TRAINING_STATE = {"is_running": False, "progress": 0, "message": "Idle"}
 
-# ... (Helper functions load_system_resources, clean_text_deep, is_valid_text sama) ...
 def load_system_resources():
     print("🚀 [SYSTEM START] Loading AI Models...")
     try:
@@ -59,6 +61,7 @@ def load_system_resources():
 
 load_system_resources()
 
+# --- HELPERS ---
 def clean_text_deep(text):
     if not isinstance(text, str): return ""
     text = text.lower().strip()
@@ -74,8 +77,9 @@ def is_valid_text(text):
     if not s or s.lower() in ["nan", "null"]: return False
     return True
 
-# ... (Helper load_dataset_auto_header, filter_output_columns, apply_excel_styling SAMA SEPERTI SEBELUMNYA) ...
+# --- AUTO DETECT HEADER ---
 def load_dataset_auto_header(file_contents):
+    """Scan 10 baris pertama untuk mencari Header"""
     try:
         temp_df = pd.read_excel(io.BytesIO(file_contents), header=None, nrows=10, engine='openpyxl')
         header_idx = 0
@@ -114,6 +118,7 @@ def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
 
     for row in ws.iter_rows(min_row=header_row_num + 1, min_col=start_col_idx):
         for cell in row:
+            # Hanya style jika di atasnya ada header
             if ws.cell(row=header_row_num, column=cell.column).value: 
                 cell.border = thin_border; cell.alignment = Alignment(vertical="center")
                 if report_type == 'monthly' and svc_col_index and cell.column == svc_col_index:
@@ -146,6 +151,7 @@ async def predict_excel(
     if not file.filename.endswith(('.xlsx', '.xls')): raise HTTPException(400, "Invalid file format.")
     try:
         contents = await file.read()
+        # AUTO DETECT HEADER
         df_raw = load_dataset_auto_header(contents)
         
         input_col = 'PROC_DETAIL_E'
@@ -161,8 +167,6 @@ async def predict_excel(
         valid_mask = X_temp.apply(is_valid_text)
         X_pred = X_temp[valid_mask].tolist()
 
-        # PREDICT LOGIC (Daily/Monthly) ...
-        # (LOGIC SAMA SEPERTI V15, HANYA MEMASTIKAN DEFAULT CLEANSING FALSE)
         if report_type == 'daily':
             df_final['Defect1'] = "-"; df_final['Defect2'] = "-"; df_final['Defect3'] = "-"
             if len(X_pred) > 0 and 'defect' in ai_models:
@@ -200,7 +204,6 @@ async def predict_excel(
         print(f"Error: {e}")
         raise HTTPException(500, f"Server Error: {str(e)}")
 
-# TRAINING ENDPOINT (DEFAULT CLEAN = FALSE)
 def run_training_process(clean_bool):
     global TRAINING_STATE
     TRAINING_STATE["is_running"] = True; TRAINING_STATE["progress"] = 0; TRAINING_STATE["message"] = "Initializing..."

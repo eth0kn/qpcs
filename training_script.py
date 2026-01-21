@@ -21,7 +21,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 MODEL_NAME = 'BAAI/bge-m3' 
 
-# NAMA SHEET
+# NAMA SHEET (Harus Tepat)
 SHEET_DAILY = "PROCESS (DEFECT)"
 SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
 
@@ -33,8 +33,8 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         self.model_name = model_name
         self.model = None
         self.progress_callback = progress_callback
-        self.start_pct = start_pct # Persentase awal (misal 20%)
-        self.end_pct = end_pct     # Persentase akhir (misal 80%)
+        self.start_pct = start_pct # Persentase awal progress bar
+        self.end_pct = end_pct     # Persentase akhir progress bar
 
     def fit(self, X, y=None):
         return self
@@ -50,7 +50,7 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         else: sentences = X
         
         total_sentences = len(sentences)
-        batch_size = 64
+        batch_size = 64 # Aman untuk 16GB RAM
         all_embeddings = []
         
         # --- MANUAL BATCHING UNTUK GRANULAR PROGRESS ---
@@ -67,13 +67,12 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
             batch_emb = model.encode(batch, show_progress_bar=False)
             all_embeddings.append(batch_emb)
             
-            # Hitung Progress Real-time
-            # Kita mapping progress batch (0-100%) ke rentang global (start_pct - end_pct)
+            # Hitung Progress Real-time & Update UI
             if self.progress_callback:
                 batch_progress = (i + 1) / num_batches
+                # Mapping progress batch ke rentang global
                 current_global_pct = self.start_pct + int(batch_progress * (self.end_pct - self.start_pct))
                 
-                # Update UI: "Encoding Batch 5/20..."
                 msg = f"Encoding Data: Batch {i+1}/{num_batches}"
                 self.progress_callback(current_global_pct, msg)
         
@@ -105,23 +104,34 @@ def is_valid_training_row(text):
     if len(s) < 2: return False 
     return True
 
+# --- SMART HEADER DETECTION ---
 def load_sheet_auto_header(xls_file, sheet_name):
+    """
+    Mencari header secara otomatis di dalam sheet tertentu (Scan 10 baris pertama).
+    """
     try:
         temp_df = pd.read_excel(xls_file, sheet_name=sheet_name, header=None, nrows=10, engine='openpyxl')
         header_idx = 0
         keywords = ['DATA_TYPE', 'PROC_DETAIL_E', 'SERIAL_NO', 'PARTS_DESC1', 'CLOSE_DT_RTN_DT']
+        
         for idx, row in temp_df.iterrows():
             row_str = [str(val).strip().upper() for val in row.values]
+            # Jika baris mengandung minimal 2 keyword, itu adalah Header
             if sum(1 for k in keywords if k in row_str) >= 2:
                 header_idx = idx
+                print(f"   ℹ️ [{sheet_name}] Header found at Row {header_idx + 1}")
                 break
-        return pd.read_excel(xls_file, sheet_name=sheet_name, header=header_idx, engine='openpyxl')
-    except: return None
+        
+        # Load ulang dengan header yang benar
+        df = pd.read_excel(xls_file, sheet_name=sheet_name, header=header_idx, engine='openpyxl')
+        return df
+    except Exception as e:
+        print(f"   ⚠️ Error reading sheet '{sheet_name}': {e}")
+        return None
 
 # ==============================================================================
 # MAIN TRAINING LOGIC
 # ==============================================================================
-# DEFAULT CLEANSING SEKARANG FALSE
 def train_ai_advanced(enable_cleansing=False, progress_callback=None):
     def report(p, msg):
         if progress_callback: progress_callback(p, msg)
@@ -154,6 +164,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
 
     # --- PREPARE DATA ---
     input_col = 'PROC_DETAIL_E'
+    # Optimasi: n_jobs=4 (Pakai 4 Core), n_estimators=200
     rf_params = {'n_estimators': 200, 'n_jobs': 4, 'random_state': 42}
     
     def process_dataframe(df):
@@ -172,7 +183,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
     if df_daily is not None:
         cols = [input_col, 'Defect1', 'Defect2', 'Defect3']
         try:
-            # Jika Monthly ada, gabung. Jika tidak, pakai Daily saja.
+            # Jika Monthly ada, gabung data agar model makin pintar
             if df_monthly is not None:
                 df_defect_final = pd.concat([df_daily[cols], df_monthly[cols]], ignore_index=True)
             else:
@@ -189,7 +200,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
             run_oz = True
         except: pass
 
-    # Clean RAW DFs from RAM
+    # Hapus Raw Data dari RAM
     del df_daily, df_monthly
     gc.collect()
 
@@ -210,7 +221,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
             clf = MultiOutputClassifier(RandomForestClassifier(**rf_params))
             clf.fit(X_encoded, df_ready[['Defect1', 'Defect2', 'Defect3']])
             
-            # Save Pipeline (Simpan embedder polos tanpa callback agar bersih)
+            # Save Pipeline
             clean_embedder = BertEmbedder(MODEL_NAME)
             final_pipe = Pipeline([('embedder', clean_embedder), ('clf', clf)])
             
@@ -244,7 +255,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # Default False (Sesuai Request)
+    # DEFAULT FALSE (Unchecked)
     parser.add_argument('--clean', action='store_true', default=False) 
     args = parser.parse_args()
     train_ai_advanced(enable_cleansing=args.clean)
