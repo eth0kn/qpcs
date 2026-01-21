@@ -23,10 +23,8 @@
         .form-label { display: block; font-weight: 500; margin-bottom: 8px; color: var(--text-main); }
         .btn-primary { background-color: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 500; cursor: pointer; width: 100%; transition: all 0.2s; }
         .btn-primary:hover { background-color: var(--primary-hover); }
-        
         .status-text-active { font-weight: 600; color: var(--primary); animation: pulse 1.5s infinite; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
-
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(4px); }
         .modal-content { background: white; padding: 30px; border-radius: 16px; text-align: center; width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
         .loader { border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
@@ -76,9 +74,7 @@
         $("#trainFileInput").kendoUpload({ multiple: false });
         $("#reportType").kendoDropDownList();
 
-        // --- PERBAIKAN VITAL DI SINI ---
-        // Kosongkan URL agar mengikuti Domain/IP Nginx (Relative Path)
-        // Ini akan otomatis memanggil http://IP_VPS/predict via Nginx
+        // BIARKAN KOSONG (Relative Path)
         const API_URL = ""; 
 
         function showModal(title, sub) {
@@ -91,23 +87,34 @@
         }
         $("#btnCloseModal").click(function() { $("#processModal").fadeOut(); });
 
+        // --- FIX PADA BAGIAN INI ---
         $("#btnProcess").click(function() {
             var files = $("#fileInput").data("kendoUpload").getFiles();
             if (files.length === 0) { alert("Please select a file first."); return; }
             showModal("AI Prediction", "Reading file and analyzing...");
 
+            // 1. Siapkan File dalam Body
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
-            formData.append("report_type", $("#reportType").val());
-            formData.append("enable_cleansing", $("#chkCleanPredict").is(":checked"));
+
+            // 2. Siapkan Parameter di URL (Query String) -> SOLUSI 422 ERROR
+            var reportType = $("#reportType").val();
+            var doClean = $("#chkCleanPredict").is(":checked");
+            
+            // Gabungkan URL
+            var finalUrl = API_URL + "/predict?report_type=" + reportType + "&enable_cleansing=" + doClean;
 
             $.ajax({
-                url: API_URL + "/predict", // JADI /predict (Lewat Nginx)
-                type: "POST", data: formData, processData: false, contentType: false, xhrFields: { responseType: 'blob' },
+                url: finalUrl, // Gunakan URL yang sudah ada parameternya
+                type: "POST", 
+                data: formData, 
+                processData: false, 
+                contentType: false, 
+                xhrFields: { responseType: 'blob' },
                 success: function(blob, status, xhr) {
                     $("#modalSpinner").hide(); $("#iconSuccess").fadeIn(); $("#modalTitle").text("Success!"); $("#modalSub").text("Download starting..."); $("#btnCloseModal").show();
                     
-                    // CLEAR FILES
+                    // Clear Files
                     $(".k-upload-files").remove(); $(".k-upload-status").remove();
                     $(".k-upload.k-header").addClass("k-upload-empty");
                     $(".k-upload-button").removeClass("k-state-focused");
@@ -117,10 +124,25 @@
                     if (disposition && disposition.indexOf('attachment') !== -1) { var matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition); if (matches != null && matches[1]) filename = matches[1].replace(/['"]/g, ''); }
                     var link = document.createElement('a'); link.href = window.URL.createObjectURL(blob); link.download = filename || "Result.xlsx"; link.click();
                 },
-                error: function() { $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Error"); $("#modalSub").text("Something went wrong. Check connection."); $("#btnCloseModal").show(); }
+                error: function(xhr) { 
+                    $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Error"); 
+                    // Show detailed error if available
+                    var msg = "Something went wrong.";
+                    if(xhr.responseText) { 
+                        try { 
+                            // Coba baca pesan error JSON dari FastAPI (misal: Validation Error)
+                            // Karena responseType blob, kita perlu baca blob sebagai text dulu (agak tricky di jquery simple),
+                            // tapi biasanya status code 422 sudah cukup jelas.
+                            msg = "Validation Error (422). Check inputs.";
+                        } catch(e){} 
+                    }
+                    $("#modalSub").text(msg); 
+                    $("#btnCloseModal").show(); 
+                }
             });
         });
 
+        // TRAINING
         $("#btnTrain").click(function() {
             var files = $("#trainFileInput").data("kendoUpload").getFiles();
             if (files.length === 0) { alert("Please select a dataset file."); return; }
@@ -128,9 +150,12 @@
 
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
-            formData.append("enable_cleansing", $("#chkCleanTrain").is(":checked"));
+            
+            // Parameter juga masuk ke URL di sini
+            var doClean = $("#chkCleanTrain").is(":checked");
+            var finalUrl = API_URL + "/train?enable_cleansing=" + doClean;
 
-            fetch(API_URL + "/train?enable_cleansing=" + $("#chkCleanTrain").is(":checked"), { method: "POST", body: formData })
+            fetch(finalUrl, { method: "POST", body: formData })
             .then(response => {
                 if(response.ok) {
                     let poller = setInterval(() => {
@@ -141,7 +166,6 @@
                                 clearInterval(poller);
                                 $("#modalSpinner").hide(); $("#iconSuccess").fadeIn(); $("#modalTitle").text("Training Complete!"); $("#modalSub").removeClass("status-text-active").text("New models ready."); $("#btnCloseModal").show();
                                 
-                                // CLEAR FILES
                                 $(".k-upload-files").remove(); $(".k-upload-status").remove();
                                 $(".k-upload.k-header").addClass("k-upload-empty");
                                 $(".k-upload-button").removeClass("k-state-focused");
