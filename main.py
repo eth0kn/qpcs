@@ -1,317 +1,108 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
-from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
-import joblib
-import io
 import os
 import shutil
-import re
 import threading
-import time
+import sys
 
-# --- EXCEL STYLING LIBRARIES ---
-from openpyxl.styles import PatternFill, Border, Side, Alignment, Font
-from openpyxl.utils import get_column_letter
+# Import training script yang baru
+try:
+    from training_script import train_ai_advanced
+except ImportError:
+    print("Error: training_script.py tidak ditemukan atau error.")
+    sys.exit(1)
 
-# --- AI & NLP LIBRARIES ---
-from sentence_transformers import SentenceTransformer
-from sklearn.base import BaseEstimator, TransformerMixin
+app = FastAPI()
 
-# ==============================================================================
-# 1. AI CLASS DEFINITION
-# ==============================================================================
-class BertEmbedder(BaseEstimator, TransformerMixin):
-    def __init__(self, model_name):
-        self.model_name = model_name
-        self.model = None
-    def fit(self, X, y=None):
-        if self.model is None: self.model = SentenceTransformer(self.model_name)
-        return self
-    def transform(self, X):
-        if self.model is None: self.model = SentenceTransformer(self.model_name)
-        if hasattr(X, 'tolist'): sentences = X.tolist()
-        else: sentences = X
-        return self.model.encode(sentences, show_progress_bar=False)
-
-# ==============================================================================
-# 2. SERVER CONFIGURATION
-# ==============================================================================
-app = FastAPI(title="QPCS AI System API", version="12.0 (Precision Layout Fix)")
-
+# CORS settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-MODEL_DIR = 'models/'
+# Global State untuk Progress
+TRAINING_STATE = {
+    "is_running": False,
+    "progress": 0,
+    "message": "Idle"
+}
+
 DATASET_DIR = 'datasets/'
-MODEL_DEFECT_PATH = os.path.join(MODEL_DIR, 'model_defect.pkl')
-MODEL_OZ_PATH = os.path.join(MODEL_DIR, 'model_oz.pkl')
-
-ai_models = {}
-TRAINING_STATE = {"is_running": False, "progress": 0, "message": "Idle"}
+os.makedirs(DATASET_DIR, exist_ok=True)
 
 # ==============================================================================
-# 3. HELPER FUNCTIONS
+# HELPER: THREAD WRAPPER
 # ==============================================================================
-def load_system_resources():
-    print("🚀 [SYSTEM START] Loading AI Models into RAM...")
-    try:
-        if os.path.exists(MODEL_DEFECT_PATH) and os.path.exists(MODEL_OZ_PATH):
-            ai_models['defect'] = joblib.load(MODEL_DEFECT_PATH)
-            ai_models['oz'] = joblib.load(MODEL_OZ_PATH)
-            print("   ✅ AI Models: LOADED")
-        else:
-            print("   ⚠️ AI Models: NOT FOUND.")
-    except Exception as e:
-        print(f"   ❌ AI Models Error: {e}")
-
-load_system_resources()
-
-def clean_text_deep(text):
-    if not isinstance(text, str): return ""
-    text = text.lower().strip()
-    text = re.sub(r'\b(pend_reason|tech_remark|asc_remark|pending|remark)\b', ' ', text)
-    text = re.sub(r'\b(set ok|job done|replaced)\b', ' ', text)
-    text = re.sub(r'[\:\-\_\|\=\[\]]', ' ', text)
-    text = re.sub(r'\b(?=\w*\d)(?=\w*[a-z])\w{7,}\b', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-def is_valid_text(text):
-    s = str(text).strip()
-    blacklist = ["", "nan", "0", "-", "null", "none", "0.0", "."]
-    if s.lower() in blacklist: return False
-    if len(s) < 3: return False
-    if not re.search(r'[a-zA-Z]', s): return False
-    return True
-
-def filter_output_columns(df, input_col_name):
-    required_cols = ['DATA_TYPE', 'RCPT_NO_ORD_NO', 'CLOSE_DT_RTN_DT', 'SALES_MODEL_SUFFIX', 'SERIAL_NO', 'PARTS_DESC1', 'PARTS_DESC2', 'PARTS_DESC3', 'PROC_DETAIL_E', 'ASC_REMARK_E']
-    df_clean = pd.DataFrame()
-    for col in required_cols:
-        if col in df.columns: df_clean[col] = df[col]
-        else: df_clean[col] = "" 
-    if 'PROC_DETAIL_E' not in df.columns and input_col_name in df.columns:
-        df_clean['PROC_DETAIL_E'] = df[input_col_name]
-    return df_clean
-
-# --- UPDATED STYLING FUNCTION (Aware of Column Start) ---
-def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
+def run_training_process(enable_cleansing):
     """
-    Apply styling strictly to the table area, ignoring empty margins.
-    start_col_idx: 1-based index (e.g., 1 for Col A, 2 for Col B)
+    Fungsi ini berjalan di background thread.
     """
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid") # Indigo Header
-    header_font = Font(bold=True, color="FFFFFF")
-    
-    # Conditional Colors (Pastel)
-    fill_oz = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Hijau
-    fill_ih = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid") # Merah
-    fill_ms = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid") # Kuning
-
-    svc_col_index = None
-
-    # 1. Format Header Row (Only iterate columns with data)
-    # Gunakan iter_rows dengan min_col agar kolom kosong di kiri (margin) tidak diwarnai
-    for row in ws.iter_rows(min_row=header_row_num, max_row=header_row_num, min_col=start_col_idx):
-        for cell in row:
-            if cell.value: # Hanya style jika ada isi
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-                cell.border = thin_border
-                
-                if report_type == 'monthly' and str(cell.value).strip() == 'SVC TYPE':
-                    svc_col_index = cell.column
-
-    # 2. Format Data Rows (Start from Header + 1)
-    for row in ws.iter_rows(min_row=header_row_num + 1, min_col=start_col_idx):
-        for cell in row:
-            # Pastikan hanya mewarnai jika di dalam area tabel (ada header di atasnya)
-            # Kita cek apakah cell ini sejajar dengan kolom yang memiliki header
-            if ws.cell(row=header_row_num, column=cell.column).value: 
-                cell.border = thin_border
-                cell.alignment = Alignment(vertical="center")
-                
-                # Conditional Formatting
-                if report_type == 'monthly' and svc_col_index and cell.column == svc_col_index:
-                    val = str(cell.value).strip().upper()
-                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                    
-                    if val == 'OZ':
-                        cell.fill = fill_oz
-                        cell.font = Font(color="006100")
-                    elif val == 'IH':
-                        cell.fill = fill_ih
-                        cell.font = Font(color="9C0006")
-                    elif val == 'MS':
-                        cell.fill = fill_ms
-                        cell.font = Font(color="9C6500")
-
-    # 3. Auto-Adjust Width
-    for column in ws.columns:
-        # Skip kolom sebelum start_col_idx (misal Col A di Daily)
-        if column[0].column < start_col_idx:
-            continue
-
-        max_length = 0
-        column_letter = get_column_letter(column[0].column)
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length: max_length = len(str(cell.value))
-            except: pass
-        
-        adjusted_width = (max_length + 2)
-        if adjusted_width > 50: adjusted_width = 50
-        ws.column_dimensions[column_letter].width = adjusted_width
-
-# ==============================================================================
-# 4. PREDICTION ENDPOINT
-# ==============================================================================
-@app.post("/predict")
-async def predict_excel(
-    file: UploadFile = File(...),
-    report_type: str = Query(..., description="Select: 'daily' or 'monthly'"),
-    enable_cleansing: bool = Query(True)
-):
-    if not file.filename.endswith(('.xlsx', '.xls')): raise HTTPException(400, "Invalid file format.")
-
-    try:
-        contents = await file.read()
-        df_raw = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
-        
-        input_col = 'PROC_DETAIL_E'
-        if input_col not in df_raw.columns:
-             candidates = [c for c in df_raw.columns if 'detail' in str(c).lower()]
-             if candidates: input_col = candidates[0]
-        
-        df_final = filter_output_columns(df_raw, input_col)
-        
-        X_temp = df_final['PROC_DETAIL_E'].fillna("").astype(str)
-        if enable_cleansing: X_temp = X_temp.apply(clean_text_deep)
-        
-        valid_mask = X_temp.apply(is_valid_text)
-        X_pred = X_temp[valid_mask].tolist()
-
-        # --- SETUP LAYOUT VARIABLES ---
-        if report_type == 'daily':
-            # Logic Prediksi
-            df_final['Defect1'] = "-"
-            df_final['Defect2'] = "-"
-            df_final['Defect3'] = "-"
-            if len(X_pred) > 0:
-                 pred_def = ai_models['defect'].predict(X_pred)
-                 df_final.loc[valid_mask, 'Defect1'] = pred_def[:, 0]
-                 df_final.loc[valid_mask, 'Defect2'] = pred_def[:, 1]
-                 df_final.loc[valid_mask, 'Defect3'] = pred_def[:, 2]
-            
-            # Layout Config
-            sheet_name = 'Defect Classification'
-            start_row = 2   # Row 3 (Index 2)
-            start_col = 1   # Col B (Index 1) -> INI PERUBAHAN UTAMA
-            header_title = "DEFECT CLASSIFICATION (DAILY 1X PER DAY)"
-            header_cell = "B2"
-            
-        elif report_type == 'monthly':
-            # Logic Prediksi
-            df_final['Defect1'] = "-"
-            df_final['Defect2'] = "-"
-            df_final['Defect3'] = "-"
-            df_final['SVC TYPE'] = "-"
-            df_final['DETAIL REASON'] = "-"
-            
-            if len(X_pred) > 0:
-                pred_def = ai_models['defect'].predict(X_pred)
-                df_final.loc[valid_mask, 'Defect1'] = pred_def[:, 0]
-                df_final.loc[valid_mask, 'Defect2'] = pred_def[:, 1]
-                df_final.loc[valid_mask, 'Defect3'] = pred_def[:, 2]
-                
-                pred_oz = ai_models['oz'].predict(X_pred)
-                df_final.loc[valid_mask, 'SVC TYPE'] = pred_oz[:, 0]
-                df_final.loc[valid_mask, 'DETAIL REASON'] = pred_oz[:, 1]
-            
-            # Layout Config
-            sheet_name = 'OZ,MS,IH CATEGORY'
-            start_row = 1   # Row 2 (Index 1)
-            start_col = 0   # Col A (Index 0)
-            header_title = "OZ/MS/IH CATEGORY (MONTHLY 1X PER MONTH)"
-            header_cell = "A1"
-
-        # --- EXPORT & STYLING ---
-        output_buffer = io.BytesIO()
-        with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
-            # 1. Write Data (Start Row + Start Col)
-            df_final.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=start_col)
-            
-            worksheet = writer.sheets[sheet_name]
-            
-            # 2. Insert Title Manually
-            title_font = Font(bold=True, size=12)
-            worksheet[header_cell] = header_title
-            worksheet[header_cell].font = title_font
-            
-            # 3. Apply Table Styling (Kirim start_col + 1 agar jadi 1-based index untuk openpyxl)
-            apply_excel_styling(worksheet, report_type, header_row_num=(start_row + 1), start_col_idx=(start_col + 1))
-        
-        output_buffer.seek(0)
-        prefix = "DAILY_" if report_type == 'daily' else "MONTHLY_"
-        filename = f"{prefix}RESULT_{file.filename}"
-        
-        return StreamingResponse(
-            output_buffer, 
-            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-
-    except Exception as e:
-        print(f"Server Error: {str(e)}")
-        raise HTTPException(500, f"Server Error: {str(e)}")
-
-# ==============================================================================
-# 5. TRAINING LOGIC (Sama seperti sebelumnya)
-# ==============================================================================
-def run_training_process(clean_bool):
     global TRAINING_STATE
     TRAINING_STATE["is_running"] = True
     TRAINING_STATE["progress"] = 0
-    TRAINING_STATE["message"] = "Initializing..."
+    TRAINING_STATE["message"] = "Memulai proses..."
+    
     try:
-        from training_script import train_ai_advanced
+        # Callback untuk update progress
         def update_progress(pct, msg):
             TRAINING_STATE["progress"] = pct
             TRAINING_STATE["message"] = msg
-        train_ai_advanced(enable_cleansing=clean_bool, progress_callback=update_progress)
-        load_system_resources()
+        
+        # Panggil fungsi training (enable_cleansing diabaikan di dalam fungsi, tapi tetap dipassing)
+        train_ai_advanced(enable_cleansing=False, progress_callback=update_progress)
+        
     except Exception as e:
+        print(f"Training Error: {e}")
         TRAINING_STATE["message"] = f"Error: {str(e)}"
-        TRAINING_STATE["progress"] = 0
+        TRAINING_STATE["progress"] = 0 # Reset atau set error state code
     finally:
         TRAINING_STATE["is_running"] = False
 
+# ==============================================================================
+# ENDPOINTS
+# ==============================================================================
+
+@app.get("/")
+def read_root():
+    return {"status": "QPCS AI Backend Ready"}
+
 @app.post("/train")
-async def start_training(file: UploadFile = File(...), enable_cleansing: bool = Query(True)):
+async def start_training(file: UploadFile = File(...), enable_cleansing: bool = Query(False)):
     global TRAINING_STATE
-    if TRAINING_STATE["is_running"]: raise HTTPException(400, "Training in progress.")
-    os.makedirs(DATASET_DIR, exist_ok=True)
+    
+    if TRAINING_STATE["is_running"]:
+        raise HTTPException(status_code=400, detail="Training sedang berjalan. Mohon tunggu.")
+    
+    # 1. Simpan File Excel
     file_location = os.path.join(DATASET_DIR, "training_data.xlsx")
     try:
-        with open(file_location, "wb+") as fo: shutil.copyfileobj(file.file, fo)
+        # Hapus file lama jika ada untuk menghindari conflict permission
+        if os.path.exists(file_location):
+            os.remove(file_location)
+            
+        with open(file_location, "wb+") as fo:
+            shutil.copyfileobj(file.file, fo)
+            
     except PermissionError:
-        raise HTTPException(400, "File is locked/open in Excel. Close it first.")
-    thread = threading.Thread(target=run_training_process, args=(enable_cleansing,))
-    thread.start()
-    return {"status": "started"}
+        raise HTTPException(status_code=400, detail="File sedang dibuka oleh program lain. Tutup Excel lalu coba lagi.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal upload file: {str(e)}")
 
-@app.get("/train/status")
-async def get_training_status():
+    # 2. Jalankan Training di Background Thread
+    # Kita force enable_cleansing=False sesuai request user (RAW DATA)
+    thread = threading.Thread(target=run_training_process, args=(False,))
+    thread.start()
+    
+    return {"message": "Training dimulai di background...", "status": "started"}
+
+@app.get("/progress")
+def get_progress():
+    """
+    Endpoint ini akan ditembak oleh index.php nanti di Tahap 2
+    """
     return TRAINING_STATE
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+# (Bagian Endpoint /process untuk prediksi nanti akan kita update di tahap selanjutnya)
+# Untuk sekarang, biarkan kode lama (jika ada) atau biarkan kosong jika file main.py anda sebelumnya terpotong.

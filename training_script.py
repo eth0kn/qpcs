@@ -2,7 +2,6 @@ import pandas as pd
 import joblib
 import os
 import numpy as np
-import re
 import argparse
 import gc
 from sentence_transformers import SentenceTransformer
@@ -20,13 +19,94 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 MODEL_NAME = 'BAAI/bge-m3' 
 
-# CONFIG SHEET
+# CONFIG SHEET NAMES
 SHEET_DAILY = "PROCESS (DEFECT)"
 SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
-HEADER_INDEX = 1 
+
+# Kunci untuk Auto Detect Header
+HEADER_KEYWORD = "PROC_DETAIL_E"
 
 # ==============================================================================
-# AI EMBEDDER (PERFORMANCE OPTIMIZED FOR 16GB RAM)
+# UTILITY FUNCTIONS
+# ==============================================================================
+
+def report(progress, message):
+    """
+    Fungsi helper untuk print status. 
+    Nanti di Tahap 2 akan kita sambungkan ke Frontend.
+    """
+    print(f"[PROGRESS {progress}%] {message}")
+    # Placeholder untuk callback status ke main.py jika diperlukan nanti
+
+def find_header_index(file_path, sheet_name, keyword):
+    """
+    Mencari index baris dimana terdapat keyword tertentu (PROC_DETAIL_E).
+    Mencari max di 30 baris pertama untuk efisiensi.
+    """
+    try:
+        # Baca tanpa header dulu, ambil 30 baris saja
+        df_temp = pd.read_excel(file_path, sheet_name=sheet_name, header=None, nrows=30)
+        
+        for idx, row in df_temp.iterrows():
+            # Convert row jadi string lalu cari keyword (case insensitive)
+            row_str = row.astype(str).str.upper().tolist()
+            if keyword.upper() in row_str:
+                print(f"   > Header '{keyword}' ditemukan di baris ke-{idx + 1} pada sheet '{sheet_name}'")
+                return idx
+                
+        print(f"   ! Warning: Header '{keyword}' tidak ditemukan di 30 baris awal sheet '{sheet_name}'. Menggunakan default baris 1.")
+        return 1 # Default fallback
+    except Exception as e:
+        print(f"   ! Error saat mencari header: {str(e)}")
+        return 1
+
+def load_and_validate_data(file_path, sheet_name):
+    """
+    Load data dengan dynamic header dan membuang baris invalid (NaN di PROC_DETAIL_E).
+    """
+    if not os.path.exists(file_path):
+        print(f"File not found: {file_path}")
+        return pd.DataFrame()
+
+    # 1. Cari Header Position
+    header_idx = find_header_index(file_path, sheet_name, HEADER_KEYWORD)
+    
+    # 2. Load Data Real
+    try:
+        df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_idx)
+    except Exception as e:
+        print(f"Error reading sheet {sheet_name}: {e}")
+        return pd.DataFrame()
+
+    # 3. Validasi Kolom Kunci
+    if HEADER_KEYWORD not in df.columns:
+        print(f"Kolom {HEADER_KEYWORD} tidak ditemukan di sheet {sheet_name}. Kolom tersedia: {list(df.columns)}")
+        return pd.DataFrame()
+
+    initial_count = len(df)
+
+    # 4. Data Cleaning Minimal (Hanya memastikan tipe data String)
+    # Convert NaN menjadi string kosong dulu agar bisa dicek
+    df[HEADER_KEYWORD] = df[HEADER_KEYWORD].fillna("").astype(str)
+
+    # 5. Filtering Logic (Poin B User)
+    # Hapus jika kosong, whitespace saja, 'nan', atau '-'
+    # Kita anggap data valid jika panjang string > 1 setelah di strip
+    df = df[df[HEADER_KEYWORD].str.strip().str.len() > 1]
+    
+    # Hapus jika isinya cuma angka/simbol tidak jelas (opsional, tapi user minta skip yg tidak valid)
+    # Disini kita pastikan row yang mau ditraining memiliki Label/Target
+    
+    final_count = len(df)
+    dropped_count = initial_count - final_count
+    
+    if dropped_count > 0:
+        print(f"   > Dibuang {dropped_count} baris invalid (PROC_DETAIL_E kosong/rusak) dari {sheet_name}")
+
+    return df
+
+# ==============================================================================
+# AI EMBEDDER
 # ==============================================================================
 class BertEmbedder(BaseEstimator, TransformerMixin):
     def __init__(self, model_name):
@@ -37,210 +117,92 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        print(f"   ...Loading Model: {self.model_name}...")
-        # Load model ke CPU (RAM)
-        model = SentenceTransformer(self.model_name, device='cpu')
+        # Lazy loading model
+        if self.model is None:
+            print(f"   ...Loading Model BERT: {self.model_name}...")
+            self.model = SentenceTransformer(self.model_name, device='cpu') # Ubah ke 'cuda' jika ada GPU
         
-        if hasattr(X, 'tolist'): sentences = X.tolist()
-        else: sentences = X
+        # Pastikan input adalah list string, bukan NaN
+        X = [str(text) if text is not None else "" for text in X]
         
-        # INCREASED BATCH SIZE: 64 (Safe for 16GB RAM)
-        print(f"   ...Encoding {len(sentences)} rows with Batch Size 64...")
-        embeddings = model.encode(sentences, batch_size=64, show_progress_bar=True)
-        
-        # Clean up model to free RAM for RandomForest
-        del model
-        gc.collect()
-        
-        return embeddings
-
-# ==============================================================================
-# HELPER FUNCTIONS
-# ==============================================================================
-def clean_text_deep(text):
-    if not isinstance(text, str): return ""
-    text = text.lower().strip()
-    text = re.sub(r'\b(pend_reason|tech_remark|asc_remark|pending|remark)\b', ' ', text)
-    text = re.sub(r'\b(set ok|job done|replaced)\b', ' ', text)
-    text = re.sub(r'[\:\-\_\|\=\[\]]', ' ', text)
-    text = re.sub(r'\b(?=\w*\d)(?=\w*[a-z])\w{7,}\b', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-def is_valid_training_row(text):
-    s = str(text).strip()
-    # Filter lebih longgar agar data tidak banyak terbuang
-    if not s or s.lower() in ["nan", "null"]: return False
-    if len(s) < 2: return False 
-    return True
+        print(f"   ...Encoding {len(X)} kalimat...")
+        return self.model.encode(X, show_progress_bar=True)
 
 # ==============================================================================
 # MAIN TRAINING LOGIC
 # ==============================================================================
-def train_ai_advanced(enable_cleansing=True, progress_callback=None):
-    def report(p, msg):
-        if progress_callback: progress_callback(p, msg)
-        print(f"[{p}%] {msg}")
 
-    gc.collect()
-    mode_msg = "ON (Deep Clean)" if enable_cleansing else "OFF (Raw Data)"
-    report(5, f"Initializing Training (High Perf Mode)...")
+def train_ai_advanced(enable_cleansing=False, progress_callback=None):
+    """
+    Main function yang dipanggil oleh main.py
+    Param enable_cleansing kita ignore karena user minta RAW DATA.
+    """
+    global report
+    if progress_callback:
+        def report(p, m):
+            progress_callback(p, m)
+            print(f"[{p}%] {m}")
 
-    if not os.path.exists(DATASET_PATH):
-        report(0, "Error: Dataset file not found.")
-        return
+    report(10, "Menganalisa Struktur File Excel...")
 
-    # --- STEP 1: INSPECT SHEETS ---
-    try:
-        xls = pd.ExcelFile(DATASET_PATH, engine='openpyxl')
-        available_sheets = xls.sheet_names
-    except Exception as e:
-        report(0, f"Error reading Excel: {str(e)}")
-        return
-
-    has_daily = SHEET_DAILY in available_sheets
-    has_monthly = SHEET_MONTHLY in available_sheets
+    # --- 1. LOAD DATASET (DEFECT / DAILY) ---
+    df_defect = load_and_validate_data(DATASET_PATH, SHEET_DAILY)
     
-    # --- STEP 2: LOAD DATA ---
-    report(10, "Loading Dataset...")
-    df_daily = None
-    df_monthly = None
+    # --- 2. LOAD DATASET (CATEGORY / MONTHLY) ---
+    df_oz = load_and_validate_data(DATASET_PATH, SHEET_MONTHLY)
 
-    try:
-        if has_daily:
-            df_daily = pd.read_excel(xls, sheet_name=SHEET_DAILY, header=HEADER_INDEX)
-            df_daily.columns = df_daily.columns.str.strip()
+    # Definisi Target Columns (Sesuaikan dengan CSV user: Defect1, Defect2, Defect3)
+    # Menggunakan Title Case sesuai file yang dikirim user
+    targets_defect = ['Defect1', 'Defect2', 'Defect3']
+    targets_oz = ['SVC TYPE', 'DETAIL REASON']
+
+    # --- 3. TRAIN MODEL DEFECT ---
+    if not df_defect.empty:
+        report(20, f"Training Model Defect ({len(df_defect)} data)...")
         
-        if has_monthly:
-            df_monthly = pd.read_excel(xls, sheet_name=SHEET_MONTHLY, header=HEADER_INDEX)
-            df_monthly.columns = df_monthly.columns.str.strip()
-            
-        del xls
+        # Siapkan X dan Y
+        X = df_defect[HEADER_KEYWORD].tolist() # Raw Text
+        y = df_defect[targets_defect].fillna("-") # Isi label kosong dengan -
+        
+        # Pipeline: Embedder -> Classifier
+        # Menggunakan parameter Random Forest standard yang seimbang
+        pipeline = Pipeline([
+            ('embedder', BertEmbedder(MODEL_NAME)),
+            ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=-1)))
+        ])
+        
+        pipeline.fit(X, y)
+        
+        report(40, "Menyimpan Model Defect...")
+        joblib.dump(pipeline, f'{MODEL_DIR}model_defect.pkl')
+        del pipeline, X, y
         gc.collect()
-    except Exception as e:
-        report(0, f"Error loading data: {str(e)}")
-        return
+    else:
+        report(20, "Skip Model Defect (Data Kosong/Tidak Valid)")
 
-    # --- STEP 3: PREPARE DATA ---
-    input_col = 'PROC_DETAIL_E'
-    
-    # PERFORMANCE TUNING:
-    # n_jobs=4 (Gunakan 4 Core dari 8 Core yang ada) -> Lebih Cepat
-    # max_depth=None (Biarkan pohon tumbuh maksimal untuk akurasi lebih tinggi)
-    # n_estimators=200 (Jumlah pohon cukup banyak)
-    rf_params = {'n_estimators': 200, 'n_jobs': 4, 'random_state': 42}
-    
-    def process_dataframe(df):
-        df[input_col] = df[input_col].fillna("").astype(str)
-        if enable_cleansing:
-            df['text_ready'] = df[input_col].apply(clean_text_deep)
-            df['valid'] = df['text_ready'].apply(is_valid_training_row)
-        else:
-            df['text_ready'] = df[input_col]
-            df['valid'] = True
-        return df[df['valid'] == True].copy().fillna('unknown')
-
-    # --- LOGIC BRANCHING ---
-    df_defect_final = pd.DataFrame()
-    run_defect = False
-    
-    if has_daily and has_monthly:
-        cols = [input_col, 'Defect1', 'Defect2', 'Defect3']
-        try:
-            df_defect_final = pd.concat([df_daily[cols], df_monthly[cols]], ignore_index=True)
-            run_defect = True
-        except: pass
-    elif has_daily:
-        cols = [input_col, 'Defect1', 'Defect2', 'Defect3']
-        try:
-            df_defect_final = df_daily[cols].copy()
-            run_defect = True
-        except: pass
+    # --- 4. TRAIN MODEL CATEGORY (OZ) ---
+    if not df_oz.empty:
+        report(60, f"Training Model Category ({len(df_oz)} data)...")
         
-    if df_daily is not None: del df_daily
-    gc.collect()
-
-    df_oz_final = pd.DataFrame()
-    run_oz = False
-    if has_monthly:
-        cols = [input_col, 'SVC TYPE', 'DETAIL REASON']
-        try:
-            df_oz_final = df_monthly[cols].copy()
-            run_oz = True
-        except: pass
+        X = df_oz[HEADER_KEYWORD].tolist()
+        y = df_oz[targets_oz].fillna("-")
         
-    if df_monthly is not None: del df_monthly
-    gc.collect()
-
-    # --- STEP 4: EXECUTE TRAINING ---
-    
-    # 1. TRAIN DEFECT MODEL
-    if run_defect:
-        report(20, "Processing Defect Data...")
-        df_ready = process_dataframe(df_defect_final)
-        del df_defect_final
+        pipeline_oz = Pipeline([
+            ('embedder', BertEmbedder(MODEL_NAME)),
+            ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=-1)))
+        ])
+        
+        pipeline_oz.fit(X, y)
+        
+        report(80, "Menyimpan Model Category...")
+        joblib.dump(pipeline_oz, f'{MODEL_DIR}model_oz.pkl')
+        del pipeline_oz, X, y
         gc.collect()
-        
-        if len(df_ready) > 0:
-            report(30, f"Encoding {len(df_ready)} rows...")
-            
-            embedder = BertEmbedder(MODEL_NAME)
-            X_encoded = embedder.transform(df_ready['text_ready'].tolist())
-            
-            report(50, "Training RandomForest (Defect) [Multi-Core]...")
-            clf = MultiOutputClassifier(RandomForestClassifier(**rf_params))
-            clf.fit(X_encoded, df_ready[['Defect1', 'Defect2', 'Defect3']])
-            
-            final_pipe = Pipeline([
-                ('embedder', BertEmbedder(MODEL_NAME)), 
-                ('clf', clf)
-            ])
-            
-            report(60, "Saving Defect Model...")
-            joblib.dump(final_pipe, f'{MODEL_DIR}model_defect.pkl')
-            
-            del df_ready, X_encoded, clf, final_pipe
-            gc.collect()
-        else:
-            report(50, "No data for Defect Model.")
+    else:
+        report(60, "Skip Model Category (Data Kosong/Tidak Valid)")
 
-    # 2. TRAIN OZ MODEL
-    if run_oz:
-        report(70, "Processing Category Data...")
-        df_ready = process_dataframe(df_oz_final)
-        del df_oz_final
-        gc.collect()
-        
-        if len(df_ready) > 0:
-            report(80, f"Encoding {len(df_ready)} rows...")
-            
-            embedder = BertEmbedder(MODEL_NAME)
-            X_encoded = embedder.transform(df_ready['text_ready'].tolist())
-            
-            report(90, "Training RandomForest (Category) [Multi-Core]...")
-            clf = MultiOutputClassifier(RandomForestClassifier(**rf_params))
-            clf.fit(X_encoded, df_ready[['SVC TYPE', 'DETAIL REASON']])
-            
-            final_pipe = Pipeline([
-                ('embedder', BertEmbedder(MODEL_NAME)), 
-                ('clf', clf)
-            ])
-            
-            report(95, "Saving Category Model...")
-            joblib.dump(final_pipe, f'{MODEL_DIR}model_oz.pkl')
-            
-            del df_ready, X_encoded, clf, final_pipe
-            gc.collect()
-        else:
-            report(80, "No data for Category Model.")
-
-    report(100, "Training Complete.")
+    report(100, "Training Selesai.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--clean', action='store_true')
-    parser.add_argument('--no-clean', dest='clean', action='store_false')
-    parser.set_defaults(clean=True)
-    args = parser.parse_args()
-    
-    train_ai_advanced(enable_cleansing=args.clean)
+    # Untuk testing manual via CLI
+    train_ai_advanced()
