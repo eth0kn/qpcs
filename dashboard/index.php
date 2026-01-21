@@ -6,180 +6,400 @@
     <title>QPCS AI Admin Dashboard</title>
     
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
     <link rel="stylesheet" href="https://kendo.cdn.telerik.com/2023.1.117/styles/kendo.common.min.css" />
     <link rel="stylesheet" href="https://kendo.cdn.telerik.com/2023.1.117/styles/kendo.default.min.css" />
+    <link rel="stylesheet" href="https://kendo.cdn.telerik.com/2023.1.117/styles/kendo.default.mobile.min.css" />
     <script src="https://code.jquery.com/jquery-3.6.1.min.js"></script>
     <script src="https://kendo.cdn.telerik.com/2023.1.117/js/kendo.all.min.js"></script>
 
     <style>
-        :root { --primary: #4F46E5; --primary-hover: #4338ca; --bg-surface: #ffffff; --bg-body: #F3F4F6; --text-main: #111827; --text-muted: #6B7280; --border-color: #E5E7EB; }
-        body { font-family: 'Inter', sans-serif; background-color: var(--bg-body); margin: 0; padding: 20px; color: var(--text-main); }
-        .container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-        .card { background: var(--bg-surface); border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; border: 1px solid var(--border-color); }
-        .card-header { margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 15px; }
-        .card-title { font-size: 1.25rem; font-weight: 600; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 10px; }
-        .card-icon { background: #EEF2FF; color: var(--primary); padding: 8px; border-radius: 8px; }
-        .form-group { margin-bottom: 16px; }
-        .form-label { display: block; font-weight: 500; margin-bottom: 8px; color: var(--text-main); }
-        .btn-primary { background-color: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 500; cursor: pointer; width: 100%; transition: all 0.2s; }
-        .btn-primary:hover { background-color: var(--primary-hover); }
-        .status-text-active { font-weight: 600; color: var(--primary); animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
-        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(4px); }
-        .modal-content { background: white; padding: 30px; border-radius: 16px; text-align: center; width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
-        .loader { border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
+        :root {
+            --primary: #4F46E5; /* Indigo Modern */
+            --primary-hover: #4338ca;
+            --bg-body: #F3F4F6;
+            --card-bg: #FFFFFF;
+            --text-main: #1F2937;
+            --text-sub: #6B7280;
+            --border: #E5E7EB;
+            --success: #10B981;
+            --danger: #EF4444;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0; padding: 20px;
+            display: flex; justify-content: center; min-height: 100vh;
+        }
+
+        .main-wrapper {
+            width: 100%; max-width: 750px;
+            background: var(--card-bg);
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+            padding: 30px; margin: auto;
+        }
+
+        /* HEADER */
+        header { text-align: center; margin-bottom: 20px; }
+        h1 { margin: 0; font-size: 24px; font-weight: 700; color: #111; letter-spacing: -0.5px; }
+        .subtitle { color: var(--text-sub); font-size: 14px; margin-top: 5px; }
+
+        /* PRIVACY BADGE (RESTORED) */
+        .privacy-badge {
+            background-color: #EFF6FF;
+            border: 1px solid #DBEAFE;
+            color: #1E40AF;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 25px;
+        }
+        .privacy-badge svg { width: 16px; height: 16px; fill: currentColor; }
+
+        /* TABS NAVIGATION */
+        .tabs { display: flex; border-bottom: 2px solid #E5E7EB; margin-bottom: 30px; }
+        .tab-btn {
+            flex: 1; text-align: center; padding: 15px; cursor: pointer;
+            font-weight: 600; color: #9CA3AF; border-bottom: 2px solid transparent;
+            margin-bottom: -2px; transition: all 0.3s;
+        }
+        .tab-btn:hover { color: var(--primary); background: #F9FAFB; }
+        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+        
+        .tab-content { display: none; animation: fadeIn 0.4s; }
+        .tab-content.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* SECTIONS & CARDS */
+        .section-label {
+            font-size: 13px; font-weight: 700; color: var(--text-sub);
+            margin-bottom: 10px; display: block; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+
+        .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 25px; }
+
+        .report-card {
+            border: 2px solid var(--border); border-radius: 12px; padding: 15px;
+            cursor: pointer; transition: all 0.2s ease; position: relative;
+        }
+        .report-card:hover { border-color: var(--primary); background: #EEF2FF; }
+        .report-card.active { border-color: var(--primary); background-color: #EEF2FF; box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.1); }
+        .report-card input { position: absolute; opacity: 0; }
+
+        .card-title { font-weight: 700; display: block; font-size: 15px; margin-bottom: 4px; }
+        .card-desc { font-size: 12px; color: var(--text-sub); }
+        .check-icon { position: absolute; top: 12px; right: 12px; color: var(--primary); display: none; }
+        .report-card.active .check-icon { display: block; }
+
+        /* CONFIG BOX (TOGGLE) */
+        .config-box {
+            background: #F9FAFB; border: 1px solid var(--border); border-radius: 12px;
+            padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px;
+        }
+        
+        /* SWITCH STYLE */
+        .switch { position: relative; display: inline-block; width: 46px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #D1D5DB; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--success); }
+        input:checked + .slider:before { transform: translateX(22px); }
+
+        /* BUTTONS */
+        .btn-process {
+            width: 100%; background-color: var(--primary); color: white; border: none;
+            padding: 16px; border-radius: 12px; font-size: 15px; font-weight: 600;
+            cursor: pointer; transition: background 0.3s; margin-top: 20px;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .btn-process:hover { background-color: var(--primary-hover); }
+        .btn-process:disabled { background-color: #E5E7EB; color: #9CA3AF; cursor: not-allowed; }
+
+        .btn-train { background-color: #111827; } /* Dark button for Admin */
+        .btn-train:hover { background-color: #000000; }
+
+        /* UPLOAD OVERRIDE */
+        .k-upload { border-radius: 12px !important; border-color: var(--border) !important; }
+        .k-dropzone { background: #fff !important; padding: 15px !important; }
+
+        /* --- MODAL LOADING (Simple & Elegant) --- */
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(5px);
+            z-index: 9999; align-items: center; justify-content: center; flex-direction: column;
+        }
+        .loading-box {
+            background: white; padding: 40px; border-radius: 20px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+            text-align: center; width: 320px;
+        }
+        .spinner {
+            width: 40px; height: 40px; border: 4px solid #E5E7EB;
+            border-top: 4px solid var(--primary); border-radius: 50%;
+            margin: 0 auto 20px auto; animation: spin 1s linear infinite;
+        }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .loading-text { font-weight: 600; color: var(--text-main); margin-bottom: 5px; }
+        .loading-sub { font-size: 13px; color: var(--text-sub); }
+        
+        .modal-icon { font-size: 40px; margin-bottom: 15px; display: none; }
+        .btn-close-modal {
+            margin-top: 20px; background: #F3F4F6; border: none; padding: 8px 20px;
+            border-radius: 8px; cursor: pointer; display: none; font-weight: 500;
+        }
+        .btn-close-modal:hover { background: #E5E7EB; }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .report-grid { grid-template-columns: 1fr; }
+            .main-wrapper { padding: 20px; }
+        }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <div class="card">
-        <div class="card-header"><h2 class="card-title"><span class="card-icon">⚡</span> AI Prediction</h2></div>
-        <div class="form-group"><label class="form-label">Upload Raw Data (Excel)</label><input type="file" id="fileInput" /></div>
-        <div class="form-group"><label class="form-label">Report Type</label><select id="reportType" style="width: 100%;"><option value="daily">Daily Report (Defect)</option><option value="monthly">Monthly Report (Category)</option></select></div>
-        <div class="form-group"><label class="form-label">Options</label><div style="display: flex; align-items: center; gap: 8px;">
-            <input type="checkbox" id="chkCleanPredict"><label for="chkCleanPredict" style="margin:0; color: var(--text-muted);">Enable Data Cleansing (AI Pre-processing)</label>
-        </div></div>
-        <button class="btn-primary" id="btnProcess">Start Prediction</button>
+<div class="main-wrapper">
+    <header>
+        <h1>QPCS AI Dashboard</h1>
+        <div class="subtitle">Intelligent Defect & Category Classification</div>
+    </header>
+
+    <div class="privacy-badge">
+        <span style="font-size:18px;">🔒</span>
+        <div>
+            <strong>Zero Persistence Guarantee:</strong><br>
+            All uploaded data is processed in RAM and deleted immediately after use.
+        </div>
     </div>
 
-    <div class="card">
-        <div class="card-header"><h2 class="card-title"><span class="card-icon">🧠</span> Retrain Model</h2></div>
-        <div class="form-group"><label class="form-label">Upload Training Dataset (Excel)</label><input type="file" id="trainFileInput" /><p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 5px;">Supports: 'PROCESS (DEFECT)' and 'PROCESS (OZ,MS,IH)' sheets.</p></div>
-        <div class="form-group"><label class="form-label">Options</label><div style="display: flex; align-items: center; gap: 8px;">
-            <input type="checkbox" id="chkCleanTrain"><label for="chkCleanTrain" style="margin:0; color: var(--text-muted);">Enable Data Cleansing</label>
-        </div></div>
-        <button class="btn-primary" id="btnTrain" style="background-color: #10B981;">Start Training</button>
+    <div class="tabs">
+        <div class="tab-btn active" onclick="switchTab('predict')">📊 Prediction</div>
+        <div class="tab-btn" onclick="switchTab('train')">🎓 Admin Training</div>
     </div>
+
+    <div id="tab-predict" class="tab-content active">
+        <span class="section-label">1. Select Report Type</span>
+        <div class="report-grid">
+            <div class="report-card active" onclick="selectReport('daily')">
+                <input type="radio" name="reportType" value="daily" checked>
+                <span class="card-title">Daily Report</span>
+                <span class="card-desc">Defect Classification Only</span>
+                <span class="check-icon k-icon k-i-check"></span>
+            </div>
+            
+            <div class="report-card" onclick="selectReport('monthly')">
+                <input type="radio" name="reportType" value="monthly">
+                <span class="card-title">Monthly Report</span>
+                <span class="card-desc">Category + Defect Class</span>
+                <span class="check-icon k-icon k-i-check"></span>
+            </div>
+        </div>
+
+        <span class="section-label">2. AI Configuration</span>
+        <div class="config-box">
+            <div>
+                <div style="font-weight: 600; font-size:14px;">Deep Process Cleansing</div>
+                <div style="font-size:12px; color: var(--text-sub);">Remove noise from data [Recommended ON].</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="cleanPredict" checked>
+                <span class="slider"></span>
+            </label>
+        </div>
+
+        <span class="section-label">3. Upload File</span>
+        <input name="filePredict" id="filePredict" type="file" />
+
+        <button id="btnPredict" class="btn-process" disabled>
+            <span class="k-icon k-i-gears"></span> RUN PREDICTION
+        </button>
+    </div>
+
+    <div id="tab-train" class="tab-content">
+        <div style="background:#FFFBEB; border:1px solid #FEF3C7; color:#92400E; padding:12px; border-radius:8px; margin-bottom:20px; font-size:13px;">
+            <b>Admin Area:</b> Upload master data to retrain the AI models. This process may take a few minutes.
+        </div>
+
+        <span class="section-label">1. Training Configuration</span>
+        <div class="config-box">
+            <div>
+                <div style="font-weight: 600; font-size:14px;">Deep Training Cleansing</div>
+                <div style="font-size:12px; color: var(--text-sub);">Remove noise from data [Recommended ON].</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="cleanTrain" checked>
+                <span class="slider"></span>
+            </label>
+        </div>
+
+        <span class="section-label">2. Upload Master Data</span>
+        <input name="fileTrain" id="fileTrain" type="file" />
+
+        <button id="btnTrain" class="btn-process btn-train" disabled>
+            <span class="k-icon k-i-upload"></span> START RETRAINING
+        </button>
+    </div>
+
 </div>
 
-<div class="modal-overlay" id="processModal">
-    <div class="modal-content">
-        <div id="modalSpinner" class="loader"></div>
-        <div id="iconSuccess" style="display:none; color: #10B981; font-size: 3rem; margin-bottom: 15px;">✓</div>
-        <div id="iconError" style="display:none; color: #EF4444; font-size: 3rem; margin-bottom: 15px;">✕</div>
-        <h3 id="modalTitle" style="margin: 0 0 10px; font-weight: 600;">Processing...</h3>
-        <p id="modalSub" style="color: var(--text-muted); margin: 0 0 20px;">Please wait while AI is working.</p>
-        <div id="progressWrapper" style="width: 100%; background-color: #e5e7eb; border-radius: 9999px; height: 8px; margin-bottom: 20px; display: none;">
-             <div id="progressBar" style="background-color: var(--primary); height: 8px; border-radius: 9999px; width: 0%; transition: width 0.5s;"></div>
-        </div>
-        <button id="btnCloseModal" class="btn-primary" style="display:none; width: auto; padding: 8px 25px;">Close</button>
+<div class="modal-overlay" id="loadingModal">
+    <div class="loading-box">
+        <div class="spinner" id="modalSpinner"></div>
+        
+        <div class="modal-icon" id="iconSuccess">✅</div>
+        <div class="modal-icon" id="iconError">❌</div>
+
+        <div class="loading-text" id="modalTitle">Processing...</div>
+        <div class="loading-sub" id="modalSub">Please wait, AI is working.</div>
+
+        <button class="btn-close-modal" id="btnCloseModal" onclick="closeModal()">Close</button>
     </div>
 </div>
 
 <script>
-    $(document).ready(function() {
-        $("#fileInput").kendoUpload({ multiple: false });
-        $("#trainFileInput").kendoUpload({ multiple: false });
-        $("#reportType").kendoDropDownList();
-
-        // BIARKAN KOSONG (Relative Path)
-        const API_URL = ""; 
-
-        function showModal(title, sub) {
-            $("#processModal").css("display", "flex");
-            $("#modalTitle").text(title);
-            $("#modalSub").text(sub).removeClass("status-text-active");
-            $("#modalSpinner").show();
-            $("#iconSuccess, #iconError, #btnCloseModal, #progressWrapper").hide();
-            $("#progressBar").css("width", "0%");
+    // --- TABS LOGIC ---
+    function switchTab(tab) {
+        $(".tab-btn").removeClass("active");
+        $(".tab-content").removeClass("active");
+        
+        if(tab === 'predict') {
+            $(".tab-btn:eq(0)").addClass("active");
+            $("#tab-predict").addClass("active");
+        } else {
+            $(".tab-btn:eq(1)").addClass("active");
+            $("#tab-train").addClass("active");
         }
-        $("#btnCloseModal").click(function() { $("#processModal").fadeOut(); });
+    }
 
-        // --- FIX PADA BAGIAN INI ---
-        $("#btnProcess").click(function() {
-            var files = $("#fileInput").data("kendoUpload").getFiles();
-            if (files.length === 0) { alert("Please select a file first."); return; }
-            showModal("AI Prediction", "Reading file and analyzing...");
+    // --- SELECTION LOGIC ---
+    function selectReport(type) {
+        $(".report-card").removeClass("active");
+        $("input[name='reportType'][value='" + type + "']").closest(".report-card").addClass("active");
+        $("input[name='reportType'][value='" + type + "']").prop("checked", true);
+    }
 
-            // 1. Siapkan File dalam Body
+    function closeModal() {
+        $("#loadingModal").fadeOut();
+    }
+
+    $(document).ready(function() {
+        // --- KENDO UPLOAD INIT ---
+        $("#filePredict").kendoUpload({
+            multiple: false, validation: { allowedExtensions: [".xlsx", ".xls"] },
+            select: function() { $("#btnPredict").removeAttr("disabled").css("opacity", "1"); },
+            clear: function() { $("#btnPredict").attr("disabled", "disabled").css("opacity", "0.6"); }
+        });
+
+        $("#fileTrain").kendoUpload({
+            multiple: false, validation: { allowedExtensions: [".xlsx", ".xls"] },
+            select: function() { $("#btnTrain").removeAttr("disabled").css("opacity", "1"); },
+            clear: function() { $("#btnTrain").attr("disabled", "disabled").css("opacity", "0.6"); }
+        });
+
+        // --- PREDICTION LOGIC ---
+        $("#btnPredict").click(function() {
+            var files = $("#filePredict").data("kendoUpload").getFiles();
+            if (files.length === 0) return;
+
+            var reportType = $("input[name='reportType']:checked").val();
+            var isClean = $("#cleanPredict").is(":checked") ? "true" : "false";
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
 
-            // 2. Siapkan Parameter di URL (Query String) -> SOLUSI 422 ERROR
-            var reportType = $("#reportType").val();
-            var doClean = $("#chkCleanPredict").is(":checked");
-            
-            // Gabungkan URL
-            var finalUrl = API_URL + "/predict?report_type=" + reportType + "&enable_cleansing=" + doClean;
+            // Show Loading with RAM Status
+            $("#loadingModal").css("display", "flex").hide().fadeIn();
+            $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
+            $("#modalTitle").text("Analyzing Data...");
+            $("#modalSub").text("Securely Processing in RAM..."); // <--- UPDATED INFO
 
-            $.ajax({
-                url: finalUrl, // Gunakan URL yang sudah ada parameternya
-                type: "POST", 
-                data: formData, 
-                processData: false, 
-                contentType: false, 
-                xhrFields: { responseType: 'blob' },
-                success: function(blob, status, xhr) {
-                    $("#modalSpinner").hide(); $("#iconSuccess").fadeIn(); $("#modalTitle").text("Success!"); $("#modalSub").text("Download starting..."); $("#btnCloseModal").show();
-                    
-                    // Clear Files
-                    $(".k-upload-files").remove(); $(".k-upload-status").remove();
-                    $(".k-upload.k-header").addClass("k-upload-empty");
-                    $(".k-upload-button").removeClass("k-state-focused");
-                    $("#fileInput").data("kendoUpload").clearAllFiles();
-
-                    var filename = ""; var disposition = xhr.getResponseHeader('Content-Disposition');
-                    if (disposition && disposition.indexOf('attachment') !== -1) { var matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition); if (matches != null && matches[1]) filename = matches[1].replace(/['"]/g, ''); }
-                    var link = document.createElement('a'); link.href = window.URL.createObjectURL(blob); link.download = filename || "Result.xlsx"; link.click();
-                },
-                error: function(xhr) { 
-                    $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Error"); 
-                    // Show detailed error if available
-                    var msg = "Something went wrong.";
-                    if(xhr.responseText) { 
-                        try { 
-                            // Coba baca pesan error JSON dari FastAPI (misal: Validation Error)
-                            // Karena responseType blob, kita perlu baca blob sebagai text dulu (agak tricky di jquery simple),
-                            // tapi biasanya status code 422 sudah cukup jelas.
-                            msg = "Validation Error (422). Check inputs.";
-                        } catch(e){} 
-                    }
-                    $("#modalSub").text(msg); 
-                    $("#btnCloseModal").show(); 
-                }
+            fetch("/predict?report_type=" + reportType + "&enable_cleansing=" + isClean, { method: "POST", body: formData })
+            .then(res => { if(!res.ok) throw new Error("Server Error"); return res.blob(); })
+            .then(blob => {
+                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
+                $("#modalTitle").text("Success!"); 
+                // <--- UPDATED INFO: Confirming Deletion
+                $("#modalSub").text("Report Downloaded. Data wiped from memory."); 
+                
+                var url = window.URL.createObjectURL(blob);
+                var a = document.createElement("a"); a.href = url;
+                a.download = (reportType === 'daily' ? "DAILY_" : "MONTHLY_") + "REPORT_" + files[0].name;
+                document.body.appendChild(a); a.click(); a.remove();
+                
+                setTimeout(closeModal, 3000);
+            })
+            .catch(err => {
+                $("#modalSpinner").hide(); $("#iconError").fadeIn();
+                $("#modalTitle").text("Failed"); $("#modalSub").text(err.message);
+                $("#btnCloseModal").show();
             });
         });
 
-        // TRAINING
+        // --- TRAINING LOGIC (Background Polling) ---
         $("#btnTrain").click(function() {
-            var files = $("#trainFileInput").data("kendoUpload").getFiles();
-            if (files.length === 0) { alert("Please select a dataset file."); return; }
-            showModal("Initializing Training", "Uploading dataset..."); $("#progressWrapper").show();
+            var files = $("#fileTrain").data("kendoUpload").getFiles();
+            if (files.length === 0) return;
 
+            var isClean = $("#cleanTrain").is(":checked") ? "true" : "false";
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
-            
-            // Parameter juga masuk ke URL di sini
-            var doClean = $("#chkCleanTrain").is(":checked");
-            var finalUrl = API_URL + "/train?enable_cleansing=" + doClean;
 
-            fetch(finalUrl, { method: "POST", body: formData })
+            $("#loadingModal").css("display", "flex").hide().fadeIn();
+            $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
+            $("#modalTitle").text("Retraining AI...");
+            $("#modalSub").text("Initializing...");
+
+            // 1. Trigger Start
+            fetch("/train?enable_cleansing=" + isClean, { method: "POST", body: formData })
             .then(response => {
                 if(response.ok) {
-                    let poller = setInterval(() => {
-                        $.get(API_URL + "/train/status", function(data) {
-                            $("#progressBar").css("width", data.progress + "%");
-                            if(data.is_running) $("#modalSub").addClass("status-text-active").text(data.message);
-                            if (!data.is_running && data.progress === 100) {
+                    // 2. Poll Status Invisibly
+                    var poller = setInterval(function() {
+                        fetch("/train/status")
+                        .then(r => r.json())
+                        .then(data => {
+                            // Update Status Text Real-time
+                            $("#modalSub").text(data.message); 
+
+                            // Check Finish
+                            if(data.progress >= 100) {
                                 clearInterval(poller);
-                                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn(); $("#modalTitle").text("Training Complete!"); $("#modalSub").removeClass("status-text-active").text("New models ready."); $("#btnCloseModal").show();
-                                
-                                $(".k-upload-files").remove(); $(".k-upload-status").remove();
-                                $(".k-upload.k-header").addClass("k-upload-empty");
-                                $(".k-upload-button").removeClass("k-state-focused");
-                                $("#trainFileInput").data("kendoUpload").clearAllFiles();
+                                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
+                                $("#modalTitle").text("Training Complete!");
+                                $("#modalSub").text("New models ready. Temporary files deleted.");
+                                $("#btnCloseModal").show();
                             }
+                            // Check Error
                             if(data.message && data.message.startsWith("Error")) {
-                                clearInterval(poller); $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Training Failed"); $("#modalSub").removeClass("status-text-active").text(data.message); $("#btnCloseModal").show();
+                                clearInterval(poller);
+                                $("#modalSpinner").hide(); $("#iconError").fadeIn();
+                                $("#modalTitle").text("Training Failed");
+                                $("#modalSub").text(data.message);
+                                $("#btnCloseModal").show();
                             }
                         });
                     }, 1000);
-                } else { throw new Error("Failed to start training."); }
-            }).catch(err => { $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Error"); $("#modalSub").text(err.message); $("#btnCloseModal").show(); });
+                } else {
+                    response.json().then(data => {
+                       throw new Error(data.detail || "Failed to start training.");
+                    });
+                }
+            })
+            .catch(err => {
+                $("#modalSpinner").hide(); $("#iconError").fadeIn();
+                $("#modalTitle").text("Error"); $("#modalSub").text(err.message);
+                $("#btnCloseModal").show();
+            });
         });
     });
 </script>
+
 </body>
 </html>

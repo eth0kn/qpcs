@@ -5,7 +5,6 @@ import numpy as np
 import re
 import argparse
 import gc
-import math
 from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.multioutput import MultiOutputClassifier
@@ -21,69 +20,39 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 MODEL_NAME = 'BAAI/bge-m3' 
 
-# NAMA SHEET (Harus Tepat)
+# CONFIG SHEET
 SHEET_DAILY = "PROCESS (DEFECT)"
 SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
+HEADER_INDEX = 1 
 
 # ==============================================================================
-# AI EMBEDDER (GRANULAR PROGRESS REPORTING)
+# AI EMBEDDER (PERFORMANCE OPTIMIZED FOR 16GB RAM)
 # ==============================================================================
 class BertEmbedder(BaseEstimator, TransformerMixin):
-    def __init__(self, model_name, progress_callback=None, start_pct=0, end_pct=0):
+    def __init__(self, model_name):
         self.model_name = model_name
         self.model = None
-        self.progress_callback = progress_callback
-        self.start_pct = start_pct # Persentase awal progress bar
-        self.end_pct = end_pct     # Persentase akhir progress bar
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X):
-        if self.progress_callback: 
-            self.progress_callback(self.start_pct, f"Loading Model AI ({self.model_name})...")
-        
-        # Load Model ke CPU
+        print(f"   ...Loading Model: {self.model_name}...")
+        # Load model ke CPU (RAM)
         model = SentenceTransformer(self.model_name, device='cpu')
         
         if hasattr(X, 'tolist'): sentences = X.tolist()
         else: sentences = X
         
-        total_sentences = len(sentences)
-        batch_size = 64 # Aman untuk 16GB RAM
-        all_embeddings = []
+        # INCREASED BATCH SIZE: 64 (Safe for 16GB RAM)
+        print(f"   ...Encoding {len(sentences)} rows with Batch Size 64...")
+        embeddings = model.encode(sentences, batch_size=64, show_progress_bar=True)
         
-        # --- MANUAL BATCHING UNTUK GRANULAR PROGRESS ---
-        num_batches = math.ceil(total_sentences / batch_size)
-        
-        print(f"   ...Encoding {total_sentences} rows in {num_batches} batches...")
-        
-        for i in range(num_batches):
-            start_idx = i * batch_size
-            end_idx = min(start_idx + batch_size, total_sentences)
-            batch = sentences[start_idx:end_idx]
-            
-            # Encode batch ini
-            batch_emb = model.encode(batch, show_progress_bar=False)
-            all_embeddings.append(batch_emb)
-            
-            # Hitung Progress Real-time & Update UI
-            if self.progress_callback:
-                batch_progress = (i + 1) / num_batches
-                # Mapping progress batch ke rentang global
-                current_global_pct = self.start_pct + int(batch_progress * (self.end_pct - self.start_pct))
-                
-                msg = f"Encoding Data: Batch {i+1}/{num_batches}"
-                self.progress_callback(current_global_pct, msg)
-        
-        # Gabungkan semua batch
-        final_embeddings = np.vstack(all_embeddings)
-        
-        # Bersihkan RAM
+        # Clean up model to free RAM for RandomForest
         del model
         gc.collect()
         
-        return final_embeddings
+        return embeddings
 
 # ==============================================================================
 # HELPER FUNCTIONS
@@ -100,71 +69,65 @@ def clean_text_deep(text):
 
 def is_valid_training_row(text):
     s = str(text).strip()
+    # Filter lebih longgar agar data tidak banyak terbuang
     if not s or s.lower() in ["nan", "null"]: return False
     if len(s) < 2: return False 
     return True
 
-# --- SMART HEADER DETECTION ---
-def load_sheet_auto_header(xls_file, sheet_name):
-    """
-    Mencari header secara otomatis di dalam sheet tertentu (Scan 10 baris pertama).
-    """
-    try:
-        temp_df = pd.read_excel(xls_file, sheet_name=sheet_name, header=None, nrows=10, engine='openpyxl')
-        header_idx = 0
-        keywords = ['DATA_TYPE', 'PROC_DETAIL_E', 'SERIAL_NO', 'PARTS_DESC1', 'CLOSE_DT_RTN_DT']
-        
-        for idx, row in temp_df.iterrows():
-            row_str = [str(val).strip().upper() for val in row.values]
-            # Jika baris mengandung minimal 2 keyword, itu adalah Header
-            if sum(1 for k in keywords if k in row_str) >= 2:
-                header_idx = idx
-                print(f"   ℹ️ [{sheet_name}] Header found at Row {header_idx + 1}")
-                break
-        
-        # Load ulang dengan header yang benar
-        df = pd.read_excel(xls_file, sheet_name=sheet_name, header=header_idx, engine='openpyxl')
-        return df
-    except Exception as e:
-        print(f"   ⚠️ Error reading sheet '{sheet_name}': {e}")
-        return None
-
 # ==============================================================================
 # MAIN TRAINING LOGIC
 # ==============================================================================
-def train_ai_advanced(enable_cleansing=False, progress_callback=None):
+def train_ai_advanced(enable_cleansing=True, progress_callback=None):
     def report(p, msg):
         if progress_callback: progress_callback(p, msg)
         print(f"[{p}%] {msg}")
 
     gc.collect()
-    mode_msg = "ON" if enable_cleansing else "OFF"
-    report(5, f"Init Training (Clean: {mode_msg})...")
+    mode_msg = "ON (Deep Clean)" if enable_cleansing else "OFF (Raw Data)"
+    report(5, f"Initializing Training (High Perf Mode)...")
 
     if not os.path.exists(DATASET_PATH):
         report(0, "Error: Dataset file not found.")
         return
 
-    # --- LOAD DATA ---
+    # --- STEP 1: INSPECT SHEETS ---
     try:
         xls = pd.ExcelFile(DATASET_PATH, engine='openpyxl')
-        s_names = xls.sheet_names
+        available_sheets = xls.sheet_names
     except Exception as e:
-        report(0, f"Error: {e}")
+        report(0, f"Error reading Excel: {str(e)}")
         return
 
-    report(10, "Loading Sheets...")
-    df_daily = load_sheet_auto_header(xls, SHEET_DAILY) if SHEET_DAILY in s_names else None
-    df_monthly = load_sheet_auto_header(xls, SHEET_MONTHLY) if SHEET_MONTHLY in s_names else None
+    has_daily = SHEET_DAILY in available_sheets
+    has_monthly = SHEET_MONTHLY in available_sheets
     
-    if df_daily is not None: df_daily.columns = df_daily.columns.str.strip()
-    if df_monthly is not None: df_monthly.columns = df_monthly.columns.str.strip()
-    del xls
-    gc.collect()
+    # --- STEP 2: LOAD DATA ---
+    report(10, "Loading Dataset...")
+    df_daily = None
+    df_monthly = None
 
-    # --- PREPARE DATA ---
+    try:
+        if has_daily:
+            df_daily = pd.read_excel(xls, sheet_name=SHEET_DAILY, header=HEADER_INDEX)
+            df_daily.columns = df_daily.columns.str.strip()
+        
+        if has_monthly:
+            df_monthly = pd.read_excel(xls, sheet_name=SHEET_MONTHLY, header=HEADER_INDEX)
+            df_monthly.columns = df_monthly.columns.str.strip()
+            
+        del xls
+        gc.collect()
+    except Exception as e:
+        report(0, f"Error loading data: {str(e)}")
+        return
+
+    # --- STEP 3: PREPARE DATA ---
     input_col = 'PROC_DETAIL_E'
-    # Optimasi: n_jobs=4 (Pakai 4 Core), n_estimators=200
+    
+    # PERFORMANCE TUNING:
+    # n_jobs=4 (Gunakan 4 Core dari 8 Core yang ada) -> Lebih Cepat
+    # max_depth=None (Biarkan pohon tumbuh maksimal untuk akurasi lebih tinggi)
+    # n_estimators=200 (Jumlah pohon cukup banyak)
     rf_params = {'n_estimators': 200, 'n_jobs': 4, 'random_state': 42}
     
     def process_dataframe(df):
@@ -177,85 +140,107 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
             df['valid'] = True
         return df[df['valid'] == True].copy().fillna('unknown')
 
-    # Prepare DataFrames
+    # --- LOGIC BRANCHING ---
     df_defect_final = pd.DataFrame()
     run_defect = False
-    if df_daily is not None:
+    
+    if has_daily and has_monthly:
         cols = [input_col, 'Defect1', 'Defect2', 'Defect3']
         try:
-            # Jika Monthly ada, gabung data agar model makin pintar
-            if df_monthly is not None:
-                df_defect_final = pd.concat([df_daily[cols], df_monthly[cols]], ignore_index=True)
-            else:
-                df_defect_final = df_daily[cols].copy()
+            df_defect_final = pd.concat([df_daily[cols], df_monthly[cols]], ignore_index=True)
             run_defect = True
         except: pass
+    elif has_daily:
+        cols = [input_col, 'Defect1', 'Defect2', 'Defect3']
+        try:
+            df_defect_final = df_daily[cols].copy()
+            run_defect = True
+        except: pass
+        
+    if df_daily is not None: del df_daily
+    gc.collect()
 
     df_oz_final = pd.DataFrame()
     run_oz = False
-    if df_monthly is not None:
+    if has_monthly:
         cols = [input_col, 'SVC TYPE', 'DETAIL REASON']
         try:
             df_oz_final = df_monthly[cols].copy()
             run_oz = True
         except: pass
-
-    # Hapus Raw Data dari RAM
-    del df_daily, df_monthly
+        
+    if df_monthly is not None: del df_monthly
     gc.collect()
 
-    # --- EXECUTE TRAINING ---
+    # --- STEP 4: EXECUTE TRAINING ---
     
-    # 1. DEFECT MODEL
+    # 1. TRAIN DEFECT MODEL
     if run_defect:
-        report(15, "Prep Defect Data...")
+        report(20, "Processing Defect Data...")
         df_ready = process_dataframe(df_defect_final)
-        del df_defect_final; gc.collect()
+        del df_defect_final
+        gc.collect()
         
         if len(df_ready) > 0:
-            # Pass callback ke Embedder agar progress bar jalan saat encoding (20% -> 50%)
-            embedder = BertEmbedder(MODEL_NAME, progress_callback=progress_callback, start_pct=20, end_pct=50)
+            report(30, f"Encoding {len(df_ready)} rows...")
+            
+            embedder = BertEmbedder(MODEL_NAME)
             X_encoded = embedder.transform(df_ready['text_ready'].tolist())
             
-            report(55, "Training RF (Defect)...")
+            report(50, "Training RandomForest (Defect) [Multi-Core]...")
             clf = MultiOutputClassifier(RandomForestClassifier(**rf_params))
             clf.fit(X_encoded, df_ready[['Defect1', 'Defect2', 'Defect3']])
             
-            # Save Pipeline
-            clean_embedder = BertEmbedder(MODEL_NAME)
-            final_pipe = Pipeline([('embedder', clean_embedder), ('clf', clf)])
+            final_pipe = Pipeline([
+                ('embedder', BertEmbedder(MODEL_NAME)), 
+                ('clf', clf)
+            ])
             
             report(60, "Saving Defect Model...")
             joblib.dump(final_pipe, f'{MODEL_DIR}model_defect.pkl')
-            del df_ready, X_encoded, clf, final_pipe; gc.collect()
+            
+            del df_ready, X_encoded, clf, final_pipe
+            gc.collect()
+        else:
+            report(50, "No data for Defect Model.")
 
-    # 2. OZ MODEL
+    # 2. TRAIN OZ MODEL
     if run_oz:
-        report(65, "Prep Category Data...")
+        report(70, "Processing Category Data...")
         df_ready = process_dataframe(df_oz_final)
-        del df_oz_final; gc.collect()
+        del df_oz_final
+        gc.collect()
         
         if len(df_ready) > 0:
-            # Pass callback ke Embedder (70% -> 90%)
-            embedder = BertEmbedder(MODEL_NAME, progress_callback=progress_callback, start_pct=70, end_pct=90)
+            report(80, f"Encoding {len(df_ready)} rows...")
+            
+            embedder = BertEmbedder(MODEL_NAME)
             X_encoded = embedder.transform(df_ready['text_ready'].tolist())
             
-            report(92, "Training RF (Category)...")
+            report(90, "Training RandomForest (Category) [Multi-Core]...")
             clf = MultiOutputClassifier(RandomForestClassifier(**rf_params))
             clf.fit(X_encoded, df_ready[['SVC TYPE', 'DETAIL REASON']])
             
-            clean_embedder = BertEmbedder(MODEL_NAME)
-            final_pipe = Pipeline([('embedder', clean_embedder), ('clf', clf)])
+            final_pipe = Pipeline([
+                ('embedder', BertEmbedder(MODEL_NAME)), 
+                ('clf', clf)
+            ])
             
             report(95, "Saving Category Model...")
             joblib.dump(final_pipe, f'{MODEL_DIR}model_oz.pkl')
-            del df_ready, X_encoded, clf, final_pipe; gc.collect()
+            
+            del df_ready, X_encoded, clf, final_pipe
+            gc.collect()
+        else:
+            report(80, "No data for Category Model.")
 
-    report(100, "Training Finished.")
+    report(100, "Training Complete.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # DEFAULT FALSE (Unchecked)
-    parser.add_argument('--clean', action='store_true', default=False) 
+    parser.add_argument('--clean', action='store_true')
+    parser.add_argument('--no-clean', dest='clean', action='store_false')
+    parser.set_defaults(clean=True)
     args = parser.parse_args()
+    
     train_ai_advanced(enable_cleansing=args.clean)
