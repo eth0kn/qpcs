@@ -265,138 +265,122 @@
 </div>
 
 <script>
-    // --- TABS LOGIC ---
-    function switchTab(tab) {
-        $(".tab-btn").removeClass("active");
-        $(".tab-content").removeClass("active");
-        
-        if(tab === 'predict') {
-            $(".tab-btn:eq(0)").addClass("active");
-            $("#tab-predict").addClass("active");
-        } else {
-            $(".tab-btn:eq(1)").addClass("active");
-            $("#tab-train").addClass("active");
-        }
-    }
-
-    // --- SELECTION LOGIC ---
-    function selectReport(type) {
-        $(".report-card").removeClass("active");
-        $("input[name='reportType'][value='" + type + "']").closest(".report-card").addClass("active");
-        $("input[name='reportType'][value='" + type + "']").prop("checked", true);
-    }
-
-    function closeModal() {
-        $("#loadingModal").fadeOut();
-    }
-
     $(document).ready(function() {
-        // --- KENDO UPLOAD INIT ---
-        $("#filePredict").kendoUpload({
-            multiple: false, validation: { allowedExtensions: [".xlsx", ".xls"] },
-            select: function() { $("#btnPredict").removeAttr("disabled").css("opacity", "1"); },
-            clear: function() { $("#btnPredict").attr("disabled", "disabled").css("opacity", "0.6"); }
-        });
+        // --- KONFIGURASI API ---
+        // Ganti localhost:8000 sesuai IP VPS Anda jika sudah live (misal 192.168.x.x:8000)
+        const API_BASE_URL = "http://127.0.0.1:8000"; 
 
-        $("#fileTrain").kendoUpload({
-            multiple: false, validation: { allowedExtensions: [".xlsx", ".xls"] },
-            select: function() { $("#btnTrain").removeAttr("disabled").css("opacity", "1"); },
-            clear: function() { $("#btnTrain").attr("disabled", "disabled").css("opacity", "0.6"); }
-        });
+        // --- HANDLER TOMBOL TRAIN ---
+        $("#btnTrain").click(function(e) {
+            e.preventDefault();
 
-        // --- PREDICTION LOGIC ---
-        $("#btnPredict").click(function() {
-            var files = $("#filePredict").data("kendoUpload").getFiles();
-            if (files.length === 0) return;
+            // 1. Ambil File
+            var fileInput = $('#fileUpload')[0];
+            if(fileInput.files.length === 0) {
+                alert("Please select a file first!");
+                return;
+            }
 
-            var reportType = $("input[name='reportType']:checked").val();
-            var isClean = $("#cleanPredict").is(":checked") ? "true" : "false";
+            // 2. Siapkan UI Loading (Modal)
+            // Kita gunakan modal yang sama, tapi teksnya kita buat dinamis
+            var modal = $("#modalProgress"); // Pastikan ID modal di HTML Anda sesuai (sesuai file asli)
+            
+            // Jika Anda menggunakan Kendo UI Dialog atau Bootstrap Modal, sesuaikan selectornya.
+            // Asumsi berdasarkan snippet: Ada elemen dengan ID modalSpinner, modalTitle, modalSub
+            $("#modalSpinner").show();
+            $("#iconSuccess").hide();
+            $("#iconError").hide();
+            $("#btnCloseModal").hide();
+            
+            $("#modalTitle").text("Starting Process...");
+            $("#modalSub").text("Uploading dataset to server...");
+            
+            // Tampilkan Modal (sesuaikan dengan cara trigger modal di template Anda)
+            // Contoh jika pakai Bootstrap: $('#modalId').modal('show');
+            // Contoh manual:
+            $(".modal-backdrop").fadeIn(); // Asumsi class container modal
+            
+            
+            // 3. Siapkan Data Form
             var formData = new FormData();
-            formData.append("file", files[0].rawFile);
+            formData.append("file", fileInput.files[0]);
+            // Force disable cleansing sesuai request
+            formData.append("enable_cleansing", "false"); 
 
-            // Show Loading with RAM Status
-            $("#loadingModal").css("display", "flex").hide().fadeIn();
-            $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
-            $("#modalTitle").text("Analyzing Data...");
-            $("#modalSub").text("Securely Processing in RAM..."); // <--- UPDATED INFO
+            // --- LOGIC UTAMA: START TRAIN & POLL PROGRESS ---
+            
+            // Variable untuk Interval Polling
+            let progressInterval = null;
 
-            fetch("/predict?report_type=" + reportType + "&enable_cleansing=" + isClean, { method: "POST", body: formData })
-            .then(res => { if(!res.ok) throw new Error("Server Error"); return res.blob(); })
-            .then(blob => {
-                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
-                $("#modalTitle").text("Success!"); 
-                // <--- UPDATED INFO: Confirming Deletion
-                $("#modalSub").text("Report Downloaded. Data wiped from memory."); 
-                
-                var url = window.URL.createObjectURL(blob);
-                var a = document.createElement("a"); a.href = url;
-                a.download = (reportType === 'daily' ? "DAILY_" : "MONTHLY_") + "REPORT_" + files[0].name;
-                document.body.appendChild(a); a.click(); a.remove();
-                
-                setTimeout(closeModal, 3000);
-            })
-            .catch(err => {
-                $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                $("#modalTitle").text("Failed"); $("#modalSub").text(err.message);
-                $("#btnCloseModal").show();
-            });
-        });
-
-        // --- TRAINING LOGIC (Background Polling) ---
-        $("#btnTrain").click(function() {
-            var files = $("#fileTrain").data("kendoUpload").getFiles();
-            if (files.length === 0) return;
-
-            var isClean = $("#cleanTrain").is(":checked") ? "true" : "false";
-            var formData = new FormData();
-            formData.append("file", files[0].rawFile);
-
-            $("#loadingModal").css("display", "flex").hide().fadeIn();
-            $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
-            $("#modalTitle").text("Retraining AI...");
-            $("#modalSub").text("Initializing...");
-
-            // 1. Trigger Start
-            fetch("/train?enable_cleansing=" + isClean, { method: "POST", body: formData })
-            .then(response => {
-                if(response.ok) {
-                    // 2. Poll Status Invisibly
-                    var poller = setInterval(function() {
-                        fetch("/train/status")
-                        .then(r => r.json())
-                        .then(data => {
-                            // Update Status Text Real-time
-                            $("#modalSub").text(data.message); 
-
-                            // Check Finish
-                            if(data.progress >= 100) {
-                                clearInterval(poller);
-                                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
-                                $("#modalTitle").text("Training Complete!");
-                                $("#modalSub").text("New models ready. Temporary files deleted.");
-                                $("#btnCloseModal").show();
-                            }
-                            // Check Error
-                            if(data.message && data.message.startsWith("Error")) {
-                                clearInterval(poller);
-                                $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                                $("#modalTitle").text("Training Failed");
+            // Fungsi untuk cek status berkala
+            function startPolling() {
+                progressInterval = setInterval(function() {
+                    $.ajax({
+                        url: API_BASE_URL + "/progress",
+                        type: "GET",
+                        success: function(data) {
+                            // Update Teks di Modal secara Real-time
+                            if (data.is_running) {
+                                // Tampilkan persentase dan pesan
+                                $("#modalTitle").text("Processing: " + data.progress + "%");
                                 $("#modalSub").text(data.message);
-                                $("#btnCloseModal").show();
-                            }
-                        });
-                    }, 1000);
-                } else {
-                    response.json().then(data => {
-                       throw new Error(data.detail || "Failed to start training.");
+                            } 
+                        },
+                        error: function() {
+                            console.log("Gagal koneksi ke progress endpoint (mungkin server busy)");
+                        }
                     });
+                }, 1000); // Cek setiap 1 detik
+            }
+
+            // A. Kirim Request Start Training
+            $.ajax({
+                url: API_BASE_URL + "/train",
+                type: "POST",
+                data: formData,
+                contentType: false,
+                processData: false,
+                beforeSend: function() {
+                    // Mulai polling segera setelah upload dimulai
+                    startPolling();
+                },
+                success: function(response) {
+                    // Training Selesai (Backend mengembalikan response 200 OK)
+                    clearInterval(progressInterval); // Stop polling
+                    
+                    // Update UI jadi Sukses
+                    $("#modalSpinner").hide();
+                    $("#iconSuccess").fadeIn();
+                    $("#modalTitle").text("Training Complete!");
+                    $("#modalSub").text("Model AI berhasil diperbarui dengan data mentah.");
+                    $("#btnCloseModal").show();
+                    
+                    // Reset form file
+                    $('#fileUpload').val('');
+                },
+                error: function(xhr, status, error) {
+                    // Error terjadi
+                    clearInterval(progressInterval); // Stop polling
+                    
+                    // Cek pesan error dari backend
+                    var errMsg = "Unknown Error";
+                    if(xhr.responseJSON && xhr.responseJSON.detail) {
+                        errMsg = xhr.responseJSON.detail;
+                    }
+
+                    // Update UI jadi Error
+                    $("#modalSpinner").hide();
+                    $("#iconError").fadeIn();
+                    $("#modalTitle").text("Process Failed");
+                    $("#modalSub").text(errMsg);
+                    $("#btnCloseModal").show();
                 }
-            })
-            .catch(err => {
-                $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                $("#modalTitle").text("Error"); $("#modalSub").text(err.message);
-                $("#btnCloseModal").show();
             });
+        });
+
+        // --- HANDLER TUTUP MODAL ---
+        $("#btnCloseModal").click(function() {
+            $(".modal-backdrop").fadeOut();
         });
     });
 </script>
