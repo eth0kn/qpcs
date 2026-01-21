@@ -32,12 +32,13 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         if self.model is None: self.model = SentenceTransformer(self.model_name)
         if hasattr(X, 'tolist'): sentences = X.tolist()
         else: sentences = X
-        return self.model.encode(sentences, show_progress_bar=False)
+        # Naikkan batch size karena RAM 16GB cukup
+        return self.model.encode(sentences, batch_size=64, show_progress_bar=False)
 
 # ==============================================================================
 # 2. SERVER CONFIGURATION
 # ==============================================================================
-app = FastAPI(title="QPCS AI System API", version="12.0 (Precision Layout Fix)")
+app = FastAPI(title="QPCS AI System API", version="13.0 (Fixed Output & Performance)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,92 +84,88 @@ def clean_text_deep(text):
     return text
 
 def is_valid_text(text):
+    # Filter diperlonggar agar tidak membuang data valid
     s = str(text).strip()
-    blacklist = ["", "nan", "0", "-", "null", "none", "0.0", "."]
-    if s.lower() in blacklist: return False
-    if len(s) < 3: return False
-    if not re.search(r'[a-zA-Z]', s): return False
+    if not s or s.lower() in ["nan", "null"]: return False
     return True
 
 def filter_output_columns(df, input_col_name):
+    # Kolom wajib yang harus ada di output
     required_cols = ['DATA_TYPE', 'RCPT_NO_ORD_NO', 'CLOSE_DT_RTN_DT', 'SALES_MODEL_SUFFIX', 'SERIAL_NO', 'PARTS_DESC1', 'PARTS_DESC2', 'PARTS_DESC3', 'PROC_DETAIL_E', 'ASC_REMARK_E']
+    
+    # Buat DataFrame baru
     df_clean = pd.DataFrame()
+    
+    # Copy kolom yang ada, isi kosong jika tidak ada
     for col in required_cols:
-        if col in df.columns: df_clean[col] = df[col]
-        else: df_clean[col] = "" 
-    if 'PROC_DETAIL_E' not in df.columns and input_col_name in df.columns:
+        if col in df.columns:
+            df_clean[col] = df[col]
+        else:
+            df_clean[col] = "" # Isi string kosong biar rapi
+            
+    # Pastikan input column ada
+    if 'PROC_DETAIL_E' not in df_clean.columns and input_col_name in df.columns:
         df_clean['PROC_DETAIL_E'] = df[input_col_name]
+        
     return df_clean
 
-# --- UPDATED STYLING FUNCTION (Aware of Column Start) ---
+# --- STYLING FUNCTION ---
 def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
-    """
-    Apply styling strictly to the table area, ignoring empty margins.
-    start_col_idx: 1-based index (e.g., 1 for Col A, 2 for Col B)
-    """
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid") # Indigo Header
+    header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF")
     
-    # Conditional Colors (Pastel)
-    fill_oz = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Hijau
-    fill_ih = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid") # Merah
-    fill_ms = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid") # Kuning
+    # Conditional Colors
+    fill_oz = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    fill_ih = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    fill_ms = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
 
     svc_col_index = None
 
-    # 1. Format Header Row (Only iterate columns with data)
-    # Gunakan iter_rows dengan min_col agar kolom kosong di kiri (margin) tidak diwarnai
+    # Style Header
     for row in ws.iter_rows(min_row=header_row_num, max_row=header_row_num, min_col=start_col_idx):
         for cell in row:
-            if cell.value: # Hanya style jika ada isi
+            if cell.value:
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.border = thin_border
-                
                 if report_type == 'monthly' and str(cell.value).strip() == 'SVC TYPE':
                     svc_col_index = cell.column
 
-    # 2. Format Data Rows (Start from Header + 1)
+    # Style Data
     for row in ws.iter_rows(min_row=header_row_num + 1, min_col=start_col_idx):
         for cell in row:
-            # Pastikan hanya mewarnai jika di dalam area tabel (ada header di atasnya)
-            # Kita cek apakah cell ini sejajar dengan kolom yang memiliki header
-            if ws.cell(row=header_row_num, column=cell.column).value: 
+            # Cek apakah cell ini punya header di atasnya (berarti bagian tabel)
+            header_cell = ws.cell(row=header_row_num, column=cell.column)
+            if header_cell.value: 
                 cell.border = thin_border
                 cell.alignment = Alignment(vertical="center")
                 
-                # Conditional Formatting
                 if report_type == 'monthly' and svc_col_index and cell.column == svc_col_index:
                     val = str(cell.value).strip().upper()
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                    
-                    if val == 'OZ':
+                    if val == 'OZ': 
                         cell.fill = fill_oz
                         cell.font = Font(color="006100")
-                    elif val == 'IH':
+                    elif val == 'IH': 
                         cell.fill = fill_ih
                         cell.font = Font(color="9C0006")
-                    elif val == 'MS':
+                    elif val == 'MS': 
                         cell.fill = fill_ms
                         cell.font = Font(color="9C6500")
 
-    # 3. Auto-Adjust Width
+    # Auto Width
     for column in ws.columns:
-        # Skip kolom sebelum start_col_idx (misal Col A di Daily)
-        if column[0].column < start_col_idx:
-            continue
-
+        if column[0].column < start_col_idx: continue
         max_length = 0
         column_letter = get_column_letter(column[0].column)
         for cell in column:
             try:
                 if len(str(cell.value)) > max_length: max_length = len(str(cell.value))
             except: pass
-        
         adjusted_width = (max_length + 2)
-        if adjusted_width > 50: adjusted_width = 50
+        if adjusted_width > 60: adjusted_width = 60
         ws.column_dimensions[column_letter].width = adjusted_width
 
 # ==============================================================================
@@ -186,40 +183,46 @@ async def predict_excel(
         contents = await file.read()
         df_raw = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
         
+        # 1. Cari Kolom Text
         input_col = 'PROC_DETAIL_E'
         if input_col not in df_raw.columns:
              candidates = [c for c in df_raw.columns if 'detail' in str(c).lower()]
              if candidates: input_col = candidates[0]
         
+        # 2. Filter Kolom
         df_final = filter_output_columns(df_raw, input_col)
         
+        # 3. Text Processing
         X_temp = df_final['PROC_DETAIL_E'].fillna("").astype(str)
         if enable_cleansing: X_temp = X_temp.apply(clean_text_deep)
         
+        # Pastikan kita memprediksi SEMUA baris agar output sejajar, 
+        # baris kosong akan dapat hasil default "-"
         valid_mask = X_temp.apply(is_valid_text)
+        
+        # Ambil data valid untuk diprediksi
         X_pred = X_temp[valid_mask].tolist()
 
-        # --- SETUP LAYOUT VARIABLES ---
+        # 4. Prediksi
         if report_type == 'daily':
-            # Logic Prediksi
+            # Init kolom kosong
             df_final['Defect1'] = "-"
             df_final['Defect2'] = "-"
             df_final['Defect3'] = "-"
-            if len(X_pred) > 0:
+            
+            if len(X_pred) > 0 and 'defect' in ai_models:
                  pred_def = ai_models['defect'].predict(X_pred)
                  df_final.loc[valid_mask, 'Defect1'] = pred_def[:, 0]
                  df_final.loc[valid_mask, 'Defect2'] = pred_def[:, 1]
                  df_final.loc[valid_mask, 'Defect3'] = pred_def[:, 2]
             
-            # Layout Config
             sheet_name = 'Defect Classification'
-            start_row = 2   # Row 3 (Index 2)
-            start_col = 1   # Col B (Index 1) -> INI PERUBAHAN UTAMA
+            start_row = 2   # Excel Row 3
+            start_col = 1   # Excel Col B
             header_title = "DEFECT CLASSIFICATION (DAILY 1X PER DAY)"
             header_cell = "B2"
             
         elif report_type == 'monthly':
-            # Logic Prediksi
             df_final['Defect1'] = "-"
             df_final['Defect2'] = "-"
             df_final['Defect3'] = "-"
@@ -227,36 +230,37 @@ async def predict_excel(
             df_final['DETAIL REASON'] = "-"
             
             if len(X_pred) > 0:
-                pred_def = ai_models['defect'].predict(X_pred)
-                df_final.loc[valid_mask, 'Defect1'] = pred_def[:, 0]
-                df_final.loc[valid_mask, 'Defect2'] = pred_def[:, 1]
-                df_final.loc[valid_mask, 'Defect3'] = pred_def[:, 2]
+                if 'defect' in ai_models:
+                    pred_def = ai_models['defect'].predict(X_pred)
+                    df_final.loc[valid_mask, 'Defect1'] = pred_def[:, 0]
+                    df_final.loc[valid_mask, 'Defect2'] = pred_def[:, 1]
+                    df_final.loc[valid_mask, 'Defect3'] = pred_def[:, 2]
                 
-                pred_oz = ai_models['oz'].predict(X_pred)
-                df_final.loc[valid_mask, 'SVC TYPE'] = pred_oz[:, 0]
-                df_final.loc[valid_mask, 'DETAIL REASON'] = pred_oz[:, 1]
+                if 'oz' in ai_models:
+                    pred_oz = ai_models['oz'].predict(X_pred)
+                    df_final.loc[valid_mask, 'SVC TYPE'] = pred_oz[:, 0]
+                    df_final.loc[valid_mask, 'DETAIL REASON'] = pred_oz[:, 1]
             
-            # Layout Config
             sheet_name = 'OZ,MS,IH CATEGORY'
-            start_row = 1   # Row 2 (Index 1)
-            start_col = 0   # Col A (Index 0)
+            start_row = 1   # Excel Row 2
+            start_col = 0   # Excel Col A
             header_title = "OZ/MS/IH CATEGORY (MONTHLY 1X PER MONTH)"
             header_cell = "A1"
 
-        # --- EXPORT & STYLING ---
+        # 5. Export dengan Layout Fix
         output_buffer = io.BytesIO()
         with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
-            # 1. Write Data (Start Row + Start Col)
+            # Tulis data
             df_final.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=start_col)
             
             worksheet = writer.sheets[sheet_name]
             
-            # 2. Insert Title Manually
+            # Tulis Judul
             title_font = Font(bold=True, size=12)
             worksheet[header_cell] = header_title
             worksheet[header_cell].font = title_font
             
-            # 3. Apply Table Styling (Kirim start_col + 1 agar jadi 1-based index untuk openpyxl)
+            # Terapkan Styling
             apply_excel_styling(worksheet, report_type, header_row_num=(start_row + 1), start_col_idx=(start_col + 1))
         
         output_buffer.seek(0)
@@ -270,11 +274,12 @@ async def predict_excel(
         )
 
     except Exception as e:
-        print(f"Server Error: {str(e)}")
-        raise HTTPException(500, f"Server Error: {str(e)}")
+        print(f"Error during prediction: {str(e)}")
+        # Jangan raise 500 jika masalah data, tapi log ke console server
+        raise HTTPException(500, f"Server Process Error: {str(e)}")
 
 # ==============================================================================
-# 5. TRAINING LOGIC (Sama seperti sebelumnya)
+# 5. TRAINING LOGIC
 # ==============================================================================
 def run_training_process(clean_bool):
     global TRAINING_STATE

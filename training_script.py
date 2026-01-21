@@ -18,7 +18,6 @@ DATASET_PATH = 'datasets/training_data.xlsx'
 MODEL_DIR = 'models/'
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# PENGGUNAAN MEMORI TINGGI: BAAI/bge-m3
 MODEL_NAME = 'BAAI/bge-m3' 
 
 # CONFIG SHEET
@@ -27,7 +26,7 @@ SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
 HEADER_INDEX = 1 
 
 # ==============================================================================
-# AI EMBEDDER (MEMORY OPTIMIZED)
+# AI EMBEDDER (PERFORMANCE OPTIMIZED FOR 16GB RAM)
 # ==============================================================================
 class BertEmbedder(BaseEstimator, TransformerMixin):
     def __init__(self, model_name):
@@ -38,24 +37,20 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        # 1. Load Model (Hanya saat dibutuhkan)
-        # device='cpu' memastikan tidak mencari GPU yang memakan VRAM/RAM sistem
-        print(f"   ...Loading Heavy Model: {self.model_name}...")
+        print(f"   ...Loading Model: {self.model_name}...")
+        # Load model ke CPU (RAM)
         model = SentenceTransformer(self.model_name, device='cpu')
         
-        # 2. Convert Data
         if hasattr(X, 'tolist'): sentences = X.tolist()
         else: sentences = X
         
-        # 3. Encode dengan Batch Size Kecil (PENTING UNTUK BGE-M3)
-        # batch_size=16 agar RAM tidak meledak saat processing
-        embeddings = model.encode(sentences, batch_size=16, show_progress_bar=True)
+        # INCREASED BATCH SIZE: 64 (Safe for 16GB RAM)
+        print(f"   ...Encoding {len(sentences)} rows with Batch Size 64...")
+        embeddings = model.encode(sentences, batch_size=64, show_progress_bar=True)
         
-        # 4. KILL MODEL (Sangat Penting!)
-        # Hapus model dari RAM agar RandomForest punya ruang untuk bernafas
+        # Clean up model to free RAM for RandomForest
         del model
         gc.collect()
-        print("   ...Model unloaded from RAM to free space.")
         
         return embeddings
 
@@ -74,10 +69,9 @@ def clean_text_deep(text):
 
 def is_valid_training_row(text):
     s = str(text).strip()
-    blacklist = ["", "nan", "0", "-", "null", "none", "0.0", "."]
-    if s.lower() in blacklist: return False
-    if len(s) < 3: return False
-    if not re.search(r'[a-zA-Z]', s): return False
+    # Filter lebih longgar agar data tidak banyak terbuang
+    if not s or s.lower() in ["nan", "null"]: return False
+    if len(s) < 2: return False 
     return True
 
 # ==============================================================================
@@ -90,7 +84,7 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
 
     gc.collect()
     mode_msg = "ON (Deep Clean)" if enable_cleansing else "OFF (Raw Data)"
-    report(5, f"Initializing BGE-M3 Training (Cleansing: {mode_msg})...")
+    report(5, f"Initializing Training (High Perf Mode)...")
 
     if not os.path.exists(DATASET_PATH):
         report(0, "Error: Dataset file not found.")
@@ -129,9 +123,12 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
 
     # --- STEP 3: PREPARE DATA ---
     input_col = 'PROC_DETAIL_E'
-    # PENTING: n_jobs=1 Wajib untuk BGE-M3 di VPS Kecil
-    # max_depth=20 untuk membatasi ukuran pohon keputusan (hemat RAM)
-    rf_params = {'n_estimators': 150, 'n_jobs': 1, 'random_state': 42, 'max_depth': 20}
+    
+    # PERFORMANCE TUNING:
+    # n_jobs=4 (Gunakan 4 Core dari 8 Core yang ada) -> Lebih Cepat
+    # max_depth=None (Biarkan pohon tumbuh maksimal untuk akurasi lebih tinggi)
+    # n_estimators=200 (Jumlah pohon cukup banyak)
+    rf_params = {'n_estimators': 200, 'n_jobs': 4, 'random_state': 42}
     
     def process_dataframe(df):
         df[input_col] = df[input_col].fillna("").astype(str)
@@ -175,7 +172,7 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
     if df_monthly is not None: del df_monthly
     gc.collect()
 
-    # --- STEP 4: EXECUTE TRAINING (SEQUENTIAL & MEMORY SAFE) ---
+    # --- STEP 4: EXECUTE TRAINING ---
     
     # 1. TRAIN DEFECT MODEL
     if run_defect:
@@ -185,17 +182,15 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
         gc.collect()
         
         if len(df_ready) > 0:
-            report(30, f"Encoding {len(df_ready)} rows with BGE-M3 (This takes time)...")
+            report(30, f"Encoding {len(df_ready)} rows...")
             
-            # Manual Pipeline untuk kontrol memori lebih baik
             embedder = BertEmbedder(MODEL_NAME)
-            X_encoded = embedder.transform(df_ready['text_ready'].tolist()) # Encode & Kill Model inside
+            X_encoded = embedder.transform(df_ready['text_ready'].tolist())
             
-            report(50, "Training RandomForest (Defect)...")
+            report(50, "Training RandomForest (Defect) [Multi-Core]...")
             clf = MultiOutputClassifier(RandomForestClassifier(**rf_params))
             clf.fit(X_encoded, df_ready[['Defect1', 'Defect2', 'Defect3']])
             
-            # Re-assemble pipeline for saving (agar compatible dengan main.py)
             final_pipe = Pipeline([
                 ('embedder', BertEmbedder(MODEL_NAME)), 
                 ('clf', clf)
@@ -217,12 +212,12 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
         gc.collect()
         
         if len(df_ready) > 0:
-            report(80, f"Encoding {len(df_ready)} rows with BGE-M3...")
+            report(80, f"Encoding {len(df_ready)} rows...")
             
             embedder = BertEmbedder(MODEL_NAME)
             X_encoded = embedder.transform(df_ready['text_ready'].tolist())
             
-            report(90, "Training RandomForest (Category)...")
+            report(90, "Training RandomForest (Category) [Multi-Core]...")
             clf = MultiOutputClassifier(RandomForestClassifier(**rf_params))
             clf.fit(X_encoded, df_ready[['SVC TYPE', 'DETAIL REASON']])
             
@@ -239,7 +234,7 @@ def train_ai_advanced(enable_cleansing=True, progress_callback=None):
         else:
             report(80, "No data for Category Model.")
 
-    report(100, "BGE-M3 Training Complete.")
+    report(100, "Training Complete.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
