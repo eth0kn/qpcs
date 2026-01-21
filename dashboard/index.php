@@ -37,48 +37,21 @@
 
 <div class="container">
     <div class="card">
-        <div class="card-header">
-            <h2 class="card-title"><span class="card-icon">⚡</span> AI Prediction</h2>
-        </div>
-        <div class="form-group">
-            <label class="form-label">Upload Raw Data (Excel)</label>
-            <input type="file" id="fileInput" />
-        </div>
-        <div class="form-group">
-            <label class="form-label">Report Type</label>
-            <select id="reportType" style="width: 100%;">
-                <option value="daily">Daily Report (Defect)</option>
-                <option value="monthly">Monthly Report (Category)</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <label class="form-label">Options</label>
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="chkCleanPredict">
-                <label for="chkCleanPredict" style="margin:0; color: var(--text-muted);">Enable Data Cleansing (AI Pre-processing)</label>
-            </div>
-        </div>
+        <div class="card-header"><h2 class="card-title"><span class="card-icon">⚡</span> AI Prediction</h2></div>
+        <div class="form-group"><label class="form-label">Upload Raw Data (Excel)</label><input type="file" id="fileInput" /></div>
+        <div class="form-group"><label class="form-label">Report Type</label><select id="reportType" style="width: 100%;"><option value="daily">Daily Report (Defect)</option><option value="monthly">Monthly Report (Category)</option></select></div>
+        <div class="form-group"><label class="form-label">Options</label><div style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="chkCleanPredict"><label for="chkCleanPredict" style="margin:0; color: var(--text-muted);">Enable Data Cleansing (AI Pre-processing)</label>
+        </div></div>
         <button class="btn-primary" id="btnProcess">Start Prediction</button>
     </div>
 
     <div class="card">
-        <div class="card-header">
-            <h2 class="card-title"><span class="card-icon">🧠</span> Retrain Model</h2>
-        </div>
-        <div class="form-group">
-            <label class="form-label">Upload Training Dataset (Excel)</label>
-            <input type="file" id="trainFileInput" />
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 5px;">
-                Supports: 'PROCESS (DEFECT)' and 'PROCESS (OZ,MS,IH)' sheets.
-            </p>
-        </div>
-        <div class="form-group">
-            <label class="form-label">Options</label>
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="chkCleanTrain">
-                <label for="chkCleanTrain" style="margin:0; color: var(--text-muted);">Enable Data Cleansing</label>
-            </div>
-        </div>
+        <div class="card-header"><h2 class="card-title"><span class="card-icon">🧠</span> Retrain Model</h2></div>
+        <div class="form-group"><label class="form-label">Upload Training Dataset (Excel)</label><input type="file" id="trainFileInput" /><p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 5px;">Supports: 'PROCESS (DEFECT)' and 'PROCESS (OZ,MS,IH)' sheets.</p></div>
+        <div class="form-group"><label class="form-label">Options</label><div style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="chkCleanTrain"><label for="chkCleanTrain" style="margin:0; color: var(--text-muted);">Enable Data Cleansing</label>
+        </div></div>
         <button class="btn-primary" id="btnTrain" style="background-color: #10B981;">Start Training</button>
     </div>
 </div>
@@ -103,8 +76,10 @@
         $("#trainFileInput").kendoUpload({ multiple: false });
         $("#reportType").kendoDropDownList();
 
-        // GANTI DENGAN IP VPS ANDA
-        const API_URL = "http://13.229.172.201:8000"; 
+        // --- PERBAIKAN VITAL DI SINI ---
+        // Kosongkan URL agar mengikuti Domain/IP Nginx (Relative Path)
+        // Ini akan otomatis memanggil http://IP_VPS/predict via Nginx
+        const API_URL = ""; 
 
         function showModal(title, sub) {
             $("#processModal").css("display", "flex");
@@ -114,13 +89,11 @@
             $("#iconSuccess, #iconError, #btnCloseModal, #progressWrapper").hide();
             $("#progressBar").css("width", "0%");
         }
-
         $("#btnCloseModal").click(function() { $("#processModal").fadeOut(); });
 
         $("#btnProcess").click(function() {
             var files = $("#fileInput").data("kendoUpload").getFiles();
             if (files.length === 0) { alert("Please select a file first."); return; }
-
             showModal("AI Prediction", "Reading file and analyzing...");
 
             var formData = new FormData();
@@ -129,97 +102,58 @@
             formData.append("enable_cleansing", $("#chkCleanPredict").is(":checked"));
 
             $.ajax({
-                url: API_URL + "/predict",
-                type: "POST",
-                data: formData,
-                processData: false, contentType: false,
-                xhrFields: { responseType: 'blob' },
+                url: API_URL + "/predict", // JADI /predict (Lewat Nginx)
+                type: "POST", data: formData, processData: false, contentType: false, xhrFields: { responseType: 'blob' },
                 success: function(blob, status, xhr) {
-                    $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
-                    $("#modalTitle").text("Success!");
-                    $("#modalSub").text("Download starting...");
-                    $("#btnCloseModal").show();
-
-                    // REVISI: Clear File Input Setelah Sukses
-                    $(".k-upload-files").remove(); 
-                    $(".k-upload-status").remove();
+                    $("#modalSpinner").hide(); $("#iconSuccess").fadeIn(); $("#modalTitle").text("Success!"); $("#modalSub").text("Download starting..."); $("#btnCloseModal").show();
+                    
+                    // CLEAR FILES
+                    $(".k-upload-files").remove(); $(".k-upload-status").remove();
                     $(".k-upload.k-header").addClass("k-upload-empty");
                     $(".k-upload-button").removeClass("k-state-focused");
                     $("#fileInput").data("kendoUpload").clearAllFiles();
 
-                    var filename = "";
-                    var disposition = xhr.getResponseHeader('Content-Disposition');
-                    if (disposition && disposition.indexOf('attachment') !== -1) {
-                        var filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-                        var matches = filenameRegex.exec(disposition);
-                        if (matches != null && matches[1]) filename = matches[1].replace(/['"]/g, '');
-                    }
-                    var link = document.createElement('a');
-                    link.href = window.URL.createObjectURL(blob);
-                    link.download = filename || "Result.xlsx";
-                    link.click();
+                    var filename = ""; var disposition = xhr.getResponseHeader('Content-Disposition');
+                    if (disposition && disposition.indexOf('attachment') !== -1) { var matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition); if (matches != null && matches[1]) filename = matches[1].replace(/['"]/g, ''); }
+                    var link = document.createElement('a'); link.href = window.URL.createObjectURL(blob); link.download = filename || "Result.xlsx"; link.click();
                 },
-                error: function(xhr) {
-                    $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                    $("#modalTitle").text("Error");
-                    $("#modalSub").text("Something went wrong.");
-                    $("#btnCloseModal").show();
-                }
+                error: function() { $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Error"); $("#modalSub").text("Something went wrong. Check connection."); $("#btnCloseModal").show(); }
             });
         });
 
         $("#btnTrain").click(function() {
             var files = $("#trainFileInput").data("kendoUpload").getFiles();
             if (files.length === 0) { alert("Please select a dataset file."); return; }
-
-            showModal("Initializing Training", "Uploading dataset...");
-            $("#progressWrapper").show();
+            showModal("Initializing Training", "Uploading dataset..."); $("#progressWrapper").show();
 
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
             formData.append("enable_cleansing", $("#chkCleanTrain").is(":checked"));
 
-            fetch(API_URL + "/train?enable_cleansing=" + $("#chkCleanTrain").is(":checked"), {
-                method: "POST", body: formData
-            }).then(response => {
+            fetch(API_URL + "/train?enable_cleansing=" + $("#chkCleanTrain").is(":checked"), { method: "POST", body: formData })
+            .then(response => {
                 if(response.ok) {
                     let poller = setInterval(() => {
                         $.get(API_URL + "/train/status", function(data) {
                             $("#progressBar").css("width", data.progress + "%");
-                            if(data.is_running) {
-                                $("#modalSub").addClass("status-text-active").text(data.message);
-                            }
+                            if(data.is_running) $("#modalSub").addClass("status-text-active").text(data.message);
                             if (!data.is_running && data.progress === 100) {
                                 clearInterval(poller);
-                                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
-                                $("#modalTitle").text("Training Complete!");
-                                $("#modalSub").removeClass("status-text-active").text("New models ready.");
-                                $("#btnCloseModal").show();
-
-                                // REVISI: Clear File Input Setelah Sukses
-                                $(".k-upload-files").remove(); 
-                                $(".k-upload-status").remove();
+                                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn(); $("#modalTitle").text("Training Complete!"); $("#modalSub").removeClass("status-text-active").text("New models ready."); $("#btnCloseModal").show();
+                                
+                                // CLEAR FILES
+                                $(".k-upload-files").remove(); $(".k-upload-status").remove();
                                 $(".k-upload.k-header").addClass("k-upload-empty");
                                 $(".k-upload-button").removeClass("k-state-focused");
                                 $("#trainFileInput").data("kendoUpload").clearAllFiles();
                             }
                             if(data.message && data.message.startsWith("Error")) {
-                                clearInterval(poller);
-                                $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                                $("#modalTitle").text("Training Failed");
-                                $("#modalSub").removeClass("status-text-active").text(data.message);
-                                $("#btnCloseModal").show();
+                                clearInterval(poller); $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Training Failed"); $("#modalSub").removeClass("status-text-active").text(data.message); $("#btnCloseModal").show();
                             }
                         });
                     }, 1000);
-                } else {
-                    throw new Error("Failed to start training.");
-                }
-            }).catch(err => {
-                $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                $("#modalTitle").text("Error"); $("#modalSub").text(err.message);
-                $("#btnCloseModal").show();
-            });
+                } else { throw new Error("Failed to start training."); }
+            }).catch(err => { $("#modalSpinner").hide(); $("#iconError").fadeIn(); $("#modalTitle").text("Error"); $("#modalSub").text(err.message); $("#btnCloseModal").show(); });
         });
     });
 </script>
