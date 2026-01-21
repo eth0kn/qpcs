@@ -162,6 +162,18 @@
             .report-grid { grid-template-columns: 1fr; }
             .main-wrapper { padding: 20px; }
         }
+
+        .status-text-active {
+            font-weight: 600;
+            color: #4F46E5; /* Warna Indigo */
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -375,6 +387,7 @@
                                 $("#modalTitle").text("Training Complete!");
                                 $("#modalSub").text("New models ready. Temporary files deleted.");
                                 $("#btnCloseModal").show();
+                                $("#modalSub").addClass("status-text-active").text(data.message);
                             }
                             // Check Error
                             if(data.message && data.message.startsWith("Error")) {
