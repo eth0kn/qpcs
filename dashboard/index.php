@@ -323,65 +323,54 @@
             if (files.length === 0) return;
 
             var reportType = $("input[name='reportType']:checked").val();
-            // Force false cleansing for predict too if needed, or keep option
-            var isClean = $("#cleanPredict").is(":checked") ? "true" : "false"; 
+            // Force false cleansing
+            var isClean = "false"; 
             
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
 
-            // Show UI
+            // Show UI Loading
             $("#loadingModal").css("display", "flex").hide().fadeIn();
-            $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
+            $("#modalSpinner").show(); 
+            $(".modal-icon, #btnCloseModal").hide();
             $("#modalTitle").text("Analyzing Data...");
-            $("#modalSub").text("Uploading and Processing...");
+            $("#modalSub").text("Uploading and Processing (this may take time)...");
 
-            $.ajax({
-                url: API_BASE_URL + "/predict?report_type=" + reportType + "&enable_cleansing=" + isClean,
-                type: "POST",
-                data: formData,
-                contentType: false,
-                processData: false,
-                success: function(response, status, xhr) {
-                    // Handle file download (response is blob/binary usually)
-                    // Note: AJAX jquery doesn't handle blob downloads easily directly
-                    // Workaround: Use fetch or check if response is JSON url
-                    
-                    // For simplicity, let's assume we use Native Fetch for download to handle Blob properly
-                    // Re-triggering using fetch for the actual download part or parsing result
-                    // But to keep it simple, let's just use the fetch method for Predict like before:
-                    // (See implementation below in Fetch block override for Predict)
-                },
-                error: function(xhr) {
-                    $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                    $("#modalTitle").text("Failed"); $("#btnCloseModal").show();
-                    var msg = xhr.responseJSON ? xhr.responseJSON.detail : "Server Error";
-                    $("#modalSub").text(msg);
-                }
-            });
-            
-            // OVERRIDE PREDICT WITH FETCH (Better for File Download)
+            // HANYA GUNAKAN FETCH (Ajax dihapus agar tidak double request)
             fetch(API_BASE_URL + "/predict?report_type=" + reportType + "&enable_cleansing=" + isClean, {
-                method: "POST", body: formData
+                method: "POST", 
+                body: formData
             })
             .then(res => {
-                if(!res.ok) throw new Error("Server Error");
-                return res.blob();
+                if(!res.ok) {
+                    // Jika server error (500/400), baca pesan errornya
+                    return res.json().then(err => { throw new Error(err.detail || "Server Error"); });
+                }
+                return res.blob(); // Ambil file excel hasil
             })
             .then(blob => {
-                $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
+                $("#modalSpinner").hide(); 
+                $("#iconSuccess").fadeIn();
                 $("#modalTitle").text("Success!");
                 $("#modalSub").text("Report Downloaded.");
                 $("#btnCloseModal").show();
 
+                // Download File Otomatis
                 var url = window.URL.createObjectURL(blob);
-                var a = document.createElement("a"); a.href = url;
+                var a = document.createElement("a"); 
+                a.href = url;
                 a.download = "RESULT_" + files[0].name;
-                document.body.appendChild(a); a.click(); a.remove();
+                document.body.appendChild(a); 
+                a.click(); 
+                a.remove();
             })
             .catch(err => {
-                $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                $("#modalTitle").text("Failed"); $("#modalSub").text(err.message);
+                $("#modalSpinner").hide(); 
+                $("#iconError").fadeIn();
+                $("#modalTitle").text("Failed"); 
+                $("#modalSub").text(err.message);
                 $("#btnCloseModal").show();
+                console.error("Error Detail:", err);
             });
         });
 
