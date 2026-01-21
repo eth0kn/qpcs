@@ -394,33 +394,55 @@
             formData.append("file", files[0].rawFile);
             formData.append("enable_cleansing", "false"); 
 
-            // Show UI
+            // Show UI Loading
             $("#loadingModal").css("display", "flex").hide().fadeIn();
-            $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
+            $("#modalSpinner").show(); 
+            $(".modal-icon, #btnCloseModal").hide();
+            
             $("#modalTitle").text("Starting Process...");
             $("#modalSub").text("Connecting to server...");
 
-            // Polling Variable
+            // Variable Interval
             let progressInterval = null;
 
-            // Start Polling Function
+            // --- FUNGSI POLLING KUNCI UTAMA ---
             function startPolling() {
                 progressInterval = setInterval(function() {
                     $.ajax({
-                        url: API_BASE_URL + "/progress", // Endpoint Tahap 1
+                        url: API_BASE_URL + "/progress",
                         type: "GET",
                         success: function(data) {
+                            // Update UI Text Real-time
                             if (data.is_running) {
-                                // Update Text Real-time dari Python
                                 $("#modalTitle").text("Processing: " + data.progress + "%");
                                 $("#modalSub").text(data.message);
                             }
+                            
+                            // LOGIC BARU: Cek Finish disini, BUKAN di ajax post
+                            // Jika is_running FALSE dan Progress 100% -> BERARTI SELESAI
+                            if (!data.is_running && data.progress >= 100) {
+                                clearInterval(progressInterval); // Stop Polling
+                                showSuccessUI();
+                            }
+                        },
+                        error: function() {
+                            // Jika server restart/down saat polling
+                            console.log("Polling connection lost...");
                         }
                     });
-                }, 1000); // 1 Detik
+                }, 1000); // Cek tiap 1 detik
             }
 
-            // Execute Train Request
+            // Fungsi Helper Tampilan Sukses
+            function showSuccessUI() {
+                $("#modalSpinner").hide(); 
+                $("#iconSuccess").fadeIn();
+                $("#modalTitle").text("Training Complete!");
+                $("#modalSub").text("Model AI berhasil diperbarui dengan data mentah.");
+                $("#btnCloseModal").show();
+            }
+
+            // --- EKSEKUSI REQUEST START ---
             $.ajax({
                 url: API_BASE_URL + "/train",
                 type: "POST",
@@ -428,30 +450,24 @@
                 contentType: false,
                 processData: false,
                 beforeSend: function() {
-                    startPolling(); // Mulai cek progress
+                    startPolling(); // Mulai memantau progress
                 },
                 success: function(response) {
-                    clearInterval(progressInterval); // Stop Polling
-                    
-                    $("#modalSpinner").hide(); $("#iconSuccess").fadeIn();
-                    $("#modalTitle").text("Training Complete!");
-                    $("#modalSub").text("Model AI berhasil diperbarui dengan data mentah.");
-                    $("#btnCloseModal").show();
-                    
-                    // Reset Upload
-                    // var upload = $("#fileTrain").data("kendoUpload");
-                    // upload.clearAllFiles(); 
+                    // PERBAIKAN: JANGAN lakukan apa-apa disini.
+                    // Biarkan Polling yang menentukan kapan finish.
+                    console.log("Command Start diterima server...");
                 },
                 error: function(xhr) {
-                    clearInterval(progressInterval); // Stop Polling
+                    clearInterval(progressInterval); // Stop jika gagal start
                     
                     var errMsg = "Unknown Error";
                     if(xhr.responseJSON && xhr.responseJSON.detail) {
                         errMsg = xhr.responseJSON.detail;
                     }
 
-                    $("#modalSpinner").hide(); $("#iconError").fadeIn();
-                    $("#modalTitle").text("Process Failed");
+                    $("#modalSpinner").hide(); 
+                    $("#iconError").fadeIn();
+                    $("#modalTitle").text("Start Failed");
                     $("#modalSub").text(errMsg);
                     $("#btnCloseModal").show();
                 }

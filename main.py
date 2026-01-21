@@ -75,28 +75,23 @@ async def start_training(file: UploadFile = File(...), enable_cleansing: bool = 
     if TRAINING_STATE["is_running"]:
         raise HTTPException(status_code=400, detail="Training sedang berjalan. Mohon tunggu.")
     
-    # 1. Simpan File Excel
+    # ... (bagian save file biarkan sama) ...
+    # 1. Simpan File Excel (kode save file biarkan seperti semula)
     file_location = os.path.join(DATASET_DIR, "training_data.xlsx")
-    try:
-        # Hapus file lama jika ada untuk menghindari conflict permission
-        if os.path.exists(file_location):
-            os.remove(file_location)
-            
-        with open(file_location, "wb+") as fo:
-            shutil.copyfileobj(file.file, fo)
-            
-    except PermissionError:
-        raise HTTPException(status_code=400, detail="File sedang dibuka oleh program lain. Tutup Excel lalu coba lagi.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal upload file: {str(e)}")
+    with open(file_location, "wb+") as fo:
+        shutil.copyfileobj(file.file, fo)
+
+    # --- PERBAIKAN DISINI ---
+    # Set status Running DULUAN sebelum thread start
+    TRAINING_STATE["is_running"] = True
+    TRAINING_STATE["progress"] = 1
+    TRAINING_STATE["message"] = "Inisialisasi..."
 
     # 2. Jalankan Training di Background Thread
-    # Kita force enable_cleansing=False sesuai request user (RAW DATA)
     thread = threading.Thread(target=run_training_process, args=(False,))
     thread.start()
     
     return {"message": "Training dimulai di background...", "status": "started"}
-
 @app.get("/progress")
 def get_progress():
     """
