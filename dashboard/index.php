@@ -271,7 +271,7 @@
     // --- KONFIGURASI API ---
     // GANTI IP INI SESUAI VPS ANDA (misal http://192.168.100.10:8000)
     // Jika menjalankan backend di localhost port 8000 dan frontend di port 80:
-    const API_BASE_URL = "http://127.0.0.1:8000"; 
+    const API_BASE_URL = "http://13.229.172.201:8000"; 
 
     // --- GLOBAL FUNCTIONS (Agar bisa dipanggil oleh onclick di HTML) ---
     
