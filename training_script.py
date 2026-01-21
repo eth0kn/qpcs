@@ -203,6 +203,89 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
 
     report(100, "Training Selesai.")
 
+# ==============================================================================
+# TAMBAHAN TAHAP 3: PREDICTION LOGIC
+# ==============================================================================
+
+def predict_excel_process(input_file_path, report_type='daily'):
+    """
+    Fungsi untuk memproses file excel, mencari header otomatis,
+    melakukan prediksi tanpa cleansing, dan mengembalikan path file hasil.
+    """
+    import datetime
+    
+    # 1. Load Model yang Sesuai
+    try:
+        if report_type == 'daily':
+            model_path = f'{MODEL_DIR}model_defect.pkl'
+            targets = ['Defect1', 'Defect2', 'Defect3']
+            if not os.path.exists(model_path):
+                raise Exception("Model Defect belum mentraining. Silakan training dulu.")
+            pipeline = joblib.load(model_path)
+            
+        else: # monthly
+            model_path = f'{MODEL_DIR}model_oz.pkl'
+            targets = ['SVC TYPE', 'DETAIL REASON']
+            if not os.path.exists(model_path):
+                raise Exception("Model Category (OZ) belum mentraining. Silakan training dulu.")
+            pipeline = joblib.load(model_path)
+            
+    except Exception as e:
+        return None, str(e)
+
+    # 2. Cari Header & Load Data
+    # Kita gunakan sheet pertama secara default untuk prediksi
+    try:
+        xls = pd.ExcelFile(input_file_path)
+        sheet_name = xls.sheet_names[0] # Ambil sheet pertama
+        
+        header_idx = find_header_index(input_file_path, sheet_name, HEADER_KEYWORD)
+        
+        # Load data, keep original untuk ditulis ulang nanti
+        df = pd.read_excel(input_file_path, sheet_name=sheet_name, header=header_idx)
+        
+        if HEADER_KEYWORD not in df.columns:
+            return None, f"Kolom '{HEADER_KEYWORD}' tidak ditemukan di sheet '{sheet_name}'"
+            
+    except Exception as e:
+        return None, f"Gagal membaca file Excel: {str(e)}"
+
+    # 3. Pre-processing (RAW - Tanpa Cleansing)
+    # Convert ke string & handle NaN
+    X_pred = df[HEADER_KEYWORD].fillna("").astype(str).tolist()
+    
+    # 4. Lakukan Prediksi
+    try:
+        # Pipeline akan otomatis melakukan embedding (Bert) -> classification
+        y_pred = pipeline.predict(X_pred)
+    except Exception as e:
+        return None, f"Error saat prediksi AI: {str(e)}"
+
+    # 5. Masukkan Hasil ke DataFrame
+    # Pastikan jumlah baris sama
+    if len(y_pred) != len(df):
+        # Fallback jika ada mismatch (jarang terjadi)
+        print("Warning: Size mismatch prediction")
+    
+    # Assign hasil ke kolom target
+    y_pred_df = pd.DataFrame(y_pred, columns=targets)
+    
+    for col in targets:
+        df[col] = y_pred_df[col]
+
+    # 6. Simpan File Hasil
+    # Format nama file hasil
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"RESULT_{report_type}_{timestamp}.xlsx"
+    output_path = os.path.join("datasets", output_filename) # Simpan di folder datasets sementara
+    
+    try:
+        df.to_excel(output_path, index=False)
+    except Exception as e:
+        return None, f"Gagal menyimpan file hasil: {str(e)}"
+        
+    return output_path, "Success"
+
 if __name__ == "__main__":
     # Untuk testing manual via CLI
     train_ai_advanced()

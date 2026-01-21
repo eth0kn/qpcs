@@ -207,12 +207,15 @@
         <div class="config-box">
             <div>
                 <div style="font-weight: 600; font-size:14px;">Deep Process Cleansing</div>
-                <div style="font-size:12px; color: var(--text-sub);">Remove noise from data [Recommended ON].</div>
+                <div style="font-size:12px; color: var(--text-sub);">Remove noise from data.</div>
             </div>
             <label class="switch">
-                <input type="checkbox" id="cleanPredict" checked>
+                <input type="checkbox" id="cleanPredict" disabled>
                 <span class="slider"></span>
             </label>
+        </div>
+        <div style="font-size:11px; color:#EF4444; margin-top:-20px; margin-bottom:20px;">
+            *Cleansing dinonaktifkan (Mode RAW Data Mentah Aktif)
         </div>
 
         <span class="section-label">3. Upload File</span>

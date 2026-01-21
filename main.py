@@ -4,10 +4,10 @@ import os
 import shutil
 import threading
 import sys
-
+from fastapi.responses import FileResponse
 # Import training script yang baru
 try:
-    from training_script import train_ai_advanced
+    from training_script import train_ai_advanced, predict_excel_process
 except ImportError:
     print("Error: training_script.py tidak ditemukan atau error.")
     sys.exit(1)
@@ -98,6 +98,45 @@ def get_progress():
     Endpoint ini akan ditembak oleh index.php nanti di Tahap 2
     """
     return TRAINING_STATE
+
+@app.post("/predict")
+async def run_prediction(
+    file: UploadFile = File(...), 
+    report_type: str = Query("daily"),
+    enable_cleansing: bool = Query(False) # Kita abaikan flag ini, force False
+):
+    # 1. Simpan File Upload Sementara
+    temp_filename = f"temp_predict_{file.filename}"
+    temp_path = os.path.join(DATASET_DIR, temp_filename)
+    
+    try:
+        with open(temp_path, "wb+") as fo:
+            shutil.copyfileobj(file.file, fo)
+            
+        # 2. Panggil Fungsi Proses (Training Script)
+        # return tuple: (output_path, error_message)
+        output_path, error_msg = predict_excel_process(temp_path, report_type)
+        
+        # 3. Hapus File Input Mentah (Cleanup)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        # 4. Cek Hasil
+        if not output_path:
+            raise HTTPException(status_code=500, detail=error_msg)
+            
+        # 5. Return File Excel Hasil
+        return FileResponse(
+            path=output_path, 
+            filename=os.path.basename(output_path),
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+    except Exception as e:
+        # Cleanup jika crash
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(status_code=500, detail=str(e))
 
 # (Bagian Endpoint /process untuk prediksi nanti akan kita update di tahap selanjutnya)
 # Untuk sekarang, biarkan kode lama (jika ada) atau biarkan kosong jika file main.py anda sebelumnya terpotong.
