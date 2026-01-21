@@ -9,33 +9,23 @@ import shutil
 import re
 import threading
 import time
-
-# --- LIBRARIES ---
 from openpyxl.styles import PatternFill, Border, Side, Alignment, Font
 from openpyxl.utils import get_column_letter
 from sentence_transformers import SentenceTransformer
 from sklearn.base import BaseEstimator, TransformerMixin
 
-# ==============================================================================
-# AI EMBEDDER CLASS (Untuk Load Model saat Prediksi)
-# ==============================================================================
+# --- CONFIG CLASS ---
 class BertEmbedder(BaseEstimator, TransformerMixin):
-    # Constructor kompatibel dengan training_script
     def __init__(self, model_name, progress_callback=None, start_pct=0, end_pct=0):
-        self.model_name = model_name
-        self.model = None
-    def fit(self, X, y=None):
-        return self
+        self.model_name = model_name; self.model = None
+    def fit(self, X, y=None): return self
     def transform(self, X):
         if self.model is None: self.model = SentenceTransformer(self.model_name)
         if hasattr(X, 'tolist'): sentences = X.tolist()
         else: sentences = X
-        # Batch size 64 aman untuk 16GB RAM
+        # BATCH SIZE 64 (Optimasi RAM)
         return self.model.encode(sentences, batch_size=64, show_progress_bar=False)
 
-# ==============================================================================
-# SERVER CONFIG
-# ==============================================================================
 app = FastAPI(title="QPCS AI System API", version="20.0 (Final Golden Copy)")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -77,20 +67,21 @@ def is_valid_text(text):
     if not s or s.lower() in ["nan", "null"]: return False
     return True
 
-# --- AUTO DETECT HEADER ---
+# --- FITUR BARU: AUTO DETECT HEADER ---
 def load_dataset_auto_header(file_contents):
-    """Scan 10 baris pertama untuk mencari Header"""
     try:
         temp_df = pd.read_excel(io.BytesIO(file_contents), header=None, nrows=10, engine='openpyxl')
         header_idx = 0
         keywords = ['DATA_TYPE', 'PROC_DETAIL_E', 'SERIAL_NO', 'PARTS_DESC1', 'CLOSE_DT_RTN_DT']
         for idx, row in temp_df.iterrows():
             row_str = [str(val).strip().upper() for val in row.values]
+            # Jika baris ini mengandung minimal 2 keyword, ini HEADER
             if sum(1 for k in keywords if k in row_str) >= 2:
                 header_idx = idx
                 break
         return pd.read_excel(io.BytesIO(file_contents), header=header_idx, engine='openpyxl')
-    except: return pd.read_excel(io.BytesIO(file_contents), header=0, engine='openpyxl')
+    except: 
+        return pd.read_excel(io.BytesIO(file_contents), header=0, engine='openpyxl')
 
 def filter_output_columns(df, input_col_name):
     required_cols = ['DATA_TYPE', 'RCPT_NO_ORD_NO', 'CLOSE_DT_RTN_DT', 'SALES_MODEL_SUFFIX', 'SERIAL_NO', 'PARTS_DESC1', 'PARTS_DESC2', 'PARTS_DESC3', 'PROC_DETAIL_E', 'ASC_REMARK_E']
@@ -118,7 +109,6 @@ def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
 
     for row in ws.iter_rows(min_row=header_row_num + 1, min_col=start_col_idx):
         for cell in row:
-            # Hanya style jika di atasnya ada header
             if ws.cell(row=header_row_num, column=cell.column).value: 
                 cell.border = thin_border; cell.alignment = Alignment(vertical="center")
                 if report_type == 'monthly' and svc_col_index and cell.column == svc_col_index:
@@ -127,7 +117,7 @@ def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
                     if val == 'OZ': cell.fill = fill_oz; cell.font = Font(color="006100")
                     elif val == 'IH': cell.fill = fill_ih; cell.font = Font(color="9C0006")
                     elif val == 'MS': cell.fill = fill_ms; cell.font = Font(color="9C6500")
-
+    
     for column in ws.columns:
         if column[0].column < start_col_idx: continue
         max_length = 0
@@ -146,12 +136,13 @@ def apply_excel_styling(ws, report_type, header_row_num, start_col_idx):
 async def predict_excel(
     file: UploadFile = File(...),
     report_type: str = Query(..., description="'daily' or 'monthly'"),
-    enable_cleansing: bool = Query(False) # DEFAULT FALSE
+    enable_cleansing: bool = Query(False) # SUDAH DIGANTI JADI FALSE
 ):
     if not file.filename.endswith(('.xlsx', '.xls')): raise HTTPException(400, "Invalid file format.")
     try:
         contents = await file.read()
-        # AUTO DETECT HEADER
+        
+        # 1. AUTO DETECT HEADER (Kunci Anti-Failed)
         df_raw = load_dataset_auto_header(contents)
         
         input_col = 'PROC_DETAIL_E'
@@ -219,7 +210,7 @@ def run_training_process(clean_bool):
         TRAINING_STATE["is_running"] = False
 
 @app.post("/train")
-async def start_training(file: UploadFile = File(...), enable_cleansing: bool = Query(False)): # DEFAULT FALSE
+async def start_training(file: UploadFile = File(...), enable_cleansing: bool = Query(False)): # SUDAH DIGANTI JADI FALSE
     global TRAINING_STATE
     if TRAINING_STATE["is_running"]: raise HTTPException(400, "Training in progress.")
     os.makedirs(DATASET_DIR, exist_ok=True)
