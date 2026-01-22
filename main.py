@@ -7,6 +7,8 @@ import threading
 import sys
 import json
 import time
+import asyncio
+import functools
 
 try:
     from training_script import train_ai_advanced, predict_excel_process
@@ -23,9 +25,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATASET_DIR = 'datasets/'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_DIR = os.path.join(BASE_DIR, 'datasets')
+STATE_FILE = os.path.join(BASE_DIR, 'progress_state.json')
+
 os.makedirs(DATASET_DIR, exist_ok=True)
-STATE_FILE = "progress_state.json"
 
 # ==============================================================================
 # STATE MANAGER (FILE BASED)
@@ -128,25 +132,32 @@ async def run_prediction(
         with open(temp_path, "wb+") as fo:
             shutil.copyfileobj(file.file, fo)
             
-        # --- DEFINISI CALLBACK PROGRESS UNTUK PREDIKSI ---
         def update_predict_progress(pct, msg):
             save_state(True, pct, msg)
 
-        # Panggil fungsi process dengan callback
-        output_path, error_msg = predict_excel_process(
-            temp_path, 
-            report_type, 
-            progress_callback=update_predict_progress # <--- Callback dipasang
+        # --- PERBAIKAN UTAMA: JALANKAN DI EXECUTOR ---
+        # Ini mencegah Server Hang saat AI bekerja
+        loop = asyncio.get_event_loop()
+        
+        # Bungkus fungsi dengan argumennya (Tanpa parameter cleansing)
+        func = functools.partial(
+            predict_excel_process, 
+            input_file_path=temp_path, 
+            report_type=report_type, 
+            progress_callback=update_predict_progress
         )
         
+        # Await proses di thread terpisah
+        output_path, error_msg = await loop.run_in_executor(None, func)
+        
+        # Cleanup
         if os.path.exists(temp_path): os.remove(temp_path)
             
         if not output_path:
-            save_state(False, 0, "Gagal Prediksi")
+            save_state(False, 0, "Prediction Failed")
             raise HTTPException(status_code=500, detail=error_msg)
             
-        # Set State Selesai sebelum kirim file
-        save_state(False, 100, "Prediksi Selesai. Mendownload...")
+        save_state(False, 100, "Prediction Complete. Downloading...")
         
         return FileResponse(
             path=output_path, 
@@ -155,6 +166,6 @@ async def run_prediction(
         )
 
     except Exception as e:
-        save_state(False, 0, f"Error: {str(e)}") # Reset state jika crash
+        save_state(False, 0, f"Error: {str(e)}")
         if os.path.exists(temp_path): os.remove(temp_path)
         raise HTTPException(status_code=500, detail=str(e))
