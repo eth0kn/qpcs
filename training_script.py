@@ -3,7 +3,7 @@ import joblib
 import os
 import numpy as np
 import gc
-import torch # Wajib import torch untuk setting CPU
+import torch
 from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.multioutput import MultiOutputClassifier
@@ -26,7 +26,7 @@ SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
 # Kunci untuk Auto Detect Header
 HEADER_KEYWORD = "PROC_DETAIL_E"
 
-# --- OPTIMASI 1: PAKSA GUNAKAN SEMUA 8 CORE CPU ---
+# --- OPTIMASI CPU ---
 torch.set_num_threads(8) 
 os.environ["OMP_NUM_THREADS"] = "8"
 os.environ["MKL_NUM_THREADS"] = "8"
@@ -89,13 +89,74 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
             self.model = SentenceTransformer(self.model_name, device='cpu')
         
         X = [str(text) if text is not None else "" for text in X]
-        
         print(f"   ...Encoding {len(X)} kalimat...")
-        
-        # --- OPTIMASI 2: BATCH SIZE BESAR (128) ---
-        # Karena RAM 16GB, kita bisa proses 128-256 kalimat sekaligus per batch.
-        # Ini akan jauh lebih cepat dibanding default (32).
         return self.model.encode(X, batch_size=128, show_progress_bar=True)
+
+# ==============================================================================
+# STYLING ENGINE (XlsxWriter)
+# ==============================================================================
+def apply_professional_style(writer, df, sheet_name, report_type):
+    """
+    Fungsi ini akan melukis Excel agar rapi, berwarna, dan professional.
+    """
+    workbook = writer.book
+    worksheet = writer.sheets[sheet_name]
+    
+    # 1. DEFINISI STYLE
+    # Header: Biru Tua, Teks Putih Bold
+    header_fmt = workbook.add_format({
+        'bold': True, 'text_wrap': True, 'valign': 'vcenter', 'align': 'center',
+        'fg_color': '#203764', 'font_color': 'white', 'border': 1
+    })
+    
+    # Body Normal: Border tipis, text wrap (untuk deskripsi panjang)
+    body_fmt = workbook.add_format({
+        'border': 1, 'valign': 'top', 'text_wrap': True, 'font_size': 11
+    })
+    
+    # Body Center: Untuk NO, Kode Symptom (agar rapi ditengah)
+    center_fmt = workbook.add_format({
+        'border': 1, 'valign': 'top', 'align': 'center', 'font_size': 11
+    })
+    
+    # Highlight AI (Kuning Muda): Untuk kolom hasil prediksi
+    ai_fmt = workbook.add_format({
+        'border': 1, 'valign': 'top', 'text_wrap': True, 
+        'fg_color': '#FFFFCC', 'font_size': 11, 'bold': False
+    })
+
+    # 2. SET LEBAR KOLOM & FORMAT
+    # Loop semua kolom untuk menentukan format
+    for col_num, col_name in enumerate(df.columns):
+        col_name_upper = str(col_name).upper()
+        
+        # A. Tentukan Lebar Kolom
+        if col_name_upper == "NO":
+            width = 5
+            style = center_fmt
+        elif "SYMPTOM" in col_name_upper and "DESC" not in col_name_upper: # Kode Symptom
+            width = 10
+            style = center_fmt
+        elif "DESC" in col_name_upper or "DETAIL" in col_name_upper or "REMARK" in col_name_upper:
+            width = 45 # Kolom Deskripsi Lebar
+            style = body_fmt
+        elif "DEFECT" in col_name_upper or "SVC TYPE" in col_name_upper or "REASON" in col_name_upper:
+            width = 20
+            style = ai_fmt # Pakai warna highlight AI
+        else:
+            width = 15
+            style = body_fmt
+
+        # B. Terapkan Style ke Kolom
+        # set_column(first_col, last_col, width, cell_format)
+        worksheet.set_column(col_num, col_num, width, style)
+        
+        # C. Tulis Ulang Header dengan Style Header
+        worksheet.write(0, col_num, col_name, header_fmt)
+
+    # 3. FREEZE HEADER & FILTER
+    worksheet.freeze_panes(1, 0) # Bekukan baris 1
+    worksheet.autofilter(0, 0, len(df), len(df.columns) - 1) # Aktifkan Filter
 
 # ==============================================================================
 # MAIN LOGIC
@@ -122,7 +183,6 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
         X = df_defect[HEADER_KEYWORD].tolist()
         y = df_defect[targets_defect].fillna("-")
         
-        # Random Forest n_jobs=-1 akan menggunakan SEMUA CPU
         pipeline = Pipeline([
             ('embedder', BertEmbedder(MODEL_NAME)),
             ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=-1)))
@@ -160,10 +220,11 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
 def predict_excel_process(input_file_path, report_type='daily'):
     import datetime
     
+    # 1. Load Model
     try:
-        # Load Model
         if report_type == 'daily':
             model_path = f'{MODEL_DIR}model_defect.pkl'
+            # Urutan kolom sesuai format yang diminta user
             targets = ['Defect1', 'Defect2', 'Defect3']
         else: 
             model_path = f'{MODEL_DIR}model_oz.pkl'
@@ -177,7 +238,7 @@ def predict_excel_process(input_file_path, report_type='daily'):
     except Exception as e:
         return None, str(e)
 
-    # Load Data
+    # 2. Load Data
     try:
         xls = pd.ExcelFile(input_file_path)
         sheet_name = xls.sheet_names[0]
@@ -190,7 +251,7 @@ def predict_excel_process(input_file_path, report_type='daily'):
     except Exception as e:
         return None, f"Gagal baca file: {str(e)}"
 
-    # Prediksi
+    # 3. Prediksi
     X_pred = df[HEADER_KEYWORD].fillna("").astype(str).tolist()
     
     try:
@@ -198,13 +259,32 @@ def predict_excel_process(input_file_path, report_type='daily'):
     except Exception as e:
         return None, f"Error prediksi: {str(e)}"
 
+    # 4. Susun Hasil ke DataFrame
     y_pred_df = pd.DataFrame(y_pred, columns=targets)
+    
+    # Masukkan hasil prediksi ke dataframe utama
     for col in targets:
         df[col] = y_pred_df[col]
+        
+    # Tambahkan kolom RESULT (Kosong) jika Daily, sesuai format
+    if report_type == 'daily' and 'RESULT' not in df.columns:
+        df['RESULT'] = ""
 
+    # 5. Export dengan Styling (XlsxWriter)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_filename = f"RESULT_{report_type}_{timestamp}.xlsx"
     output_path = os.path.join("datasets", output_filename)
     
-    df.to_excel(output_path, index=False)
+    try:
+        # Gunakan engine xlsxwriter
+        writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
+        df.to_excel(writer, index=False, sheet_name='Result')
+        
+        # Panggil fungsi styling
+        apply_professional_style(writer, df, 'Result', report_type)
+        
+        writer.close()
+    except Exception as e:
+        return None, f"Gagal styling excel: {str(e)}"
+
     return output_path, "Success"
