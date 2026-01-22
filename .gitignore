@@ -1,3 +1,5 @@
 venv/
 models/
 datasets/
+__paycache__/
+progress_state.json
