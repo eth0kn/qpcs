@@ -236,7 +236,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
     if progress_callback:
         def report(p, m): progress_callback(p, m); print(f"[{p}%] {m}")
 
-    report(10, "Menganalisa Struktur File & Load Data...")
+    report(10, "Analyzing File & Load Data...")
     df_defect = load_and_validate_data(DATASET_PATH, SHEET_DAILY)
     df_oz = load_and_validate_data(DATASET_PATH, SHEET_MONTHLY)
 
@@ -253,7 +253,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
         pipeline_oz.fit(df_oz['AI_INPUT_COMBINED'].tolist(), df_oz[TARGETS_CATEGORY].fillna("-"))
         joblib.dump(pipeline_oz, f'{MODEL_DIR}model_oz.pkl')
 
-    report(100, "Training Selesai.")
+    report(100, "Training Completed.")
 
 def predict_excel_process(input_file_path, report_type='daily', progress_callback=None):
     """
@@ -266,7 +266,7 @@ def predict_excel_process(input_file_path, report_type='daily', progress_callbac
         if progress_callback: progress_callback(p, m)
         print(f"[PREDICT {p}%] {m}")
 
-    report(5, "Membaca File Excel...")
+    report(5, "Analyzing File...")
     
     # 1. READ
     try:
@@ -302,7 +302,7 @@ def predict_excel_process(input_file_path, report_type='daily', progress_callbac
     df_valid_idx = df[mask_valid & mask_len].index
     X_pred_raw = df.loc[df_valid_idx, 'AI_INPUT_COMBINED'].tolist()
 
-    report(30, f"Loading Model AI & Encoding {len(X_pred_raw)} baris...")
+    report(30, f"Loading Model AI & Encoding {len(X_pred_raw)} rows...")
 
     # 4. PREDICT DEFECT
     if len(X_pred_raw) > 0:
@@ -313,7 +313,7 @@ def predict_excel_process(input_file_path, report_type='daily', progress_callbac
             pipeline_def = joblib.load(model_def_path)
             
             # Predict
-            report(50, "Menjalankan Prediksi Defect...")
+            report(50, "Running Predict Defect...")
             y_pred_def = pipeline_def.predict(X_pred_raw)
             
             # Map ke DF Final
@@ -325,7 +325,7 @@ def predict_excel_process(input_file_path, report_type='daily', progress_callbac
         # 5. PREDICT CATEGORY
         if report_type == 'monthly':
             try:
-                report(70, "Menjalankan Prediksi Category (Monthly)...")
+                report(70, "Running Predict Category (Monthly)...")
                 model_cat_path = f'{MODEL_DIR}model_oz.pkl'
                 if not os.path.exists(model_cat_path): return None, "Model Category belum ada."
                 
@@ -365,5 +365,5 @@ def predict_excel_process(input_file_path, report_type='daily', progress_callbac
     except Exception as e:
         return None, f"Gagal styling excel: {str(e)}"
 
-    report(100, "Selesai. Mengirim File...")
+    report(100, "Completed...")
     return output_path, "Success"
