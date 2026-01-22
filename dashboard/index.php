@@ -15,7 +15,7 @@
 
     <style>
         :root {
-            --primary: #4F46E5; /* Indigo Modern */
+            --primary: #4F46E5;
             --primary-hover: #4338ca;
             --bg-body: #F3F4F6;
             --card-bg: #FFFFFF;
@@ -42,27 +42,19 @@
             padding: 30px; margin: auto;
         }
 
-        /* HEADER */
         header { text-align: center; margin-bottom: 20px; }
         h1 { margin: 0; font-size: 24px; font-weight: 700; color: #111; letter-spacing: -0.5px; }
         .subtitle { color: var(--text-sub); font-size: 14px; margin-top: 5px; }
 
-        /* PRIVACY BADGE */
         .privacy-badge {
             background-color: #EFF6FF;
             border: 1px solid #DBEAFE;
             color: #1E40AF;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
+            padding: 12px; border-radius: 8px; font-size: 13px;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
             margin-bottom: 25px;
         }
 
-        /* TABS NAVIGATION */
         .tabs { display: flex; border-bottom: 2px solid #E5E7EB; margin-bottom: 30px; }
         .tab-btn {
             flex: 1; text-align: center; padding: 15px; cursor: pointer;
@@ -76,7 +68,6 @@
         .tab-content.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-        /* SECTIONS & CARDS */
         .section-label {
             font-size: 13px; font-weight: 700; color: var(--text-sub);
             margin-bottom: 10px; display: block; text-transform: uppercase; letter-spacing: 0.5px;
@@ -106,15 +97,14 @@
         }
         .btn-process:hover { background-color: var(--primary-hover); }
         .btn-process:disabled { background-color: #E5E7EB; color: #9CA3AF; cursor: not-allowed; }
-
         .btn-train { background-color: #111827; } 
         .btn-train:hover { background-color: #000000; }
 
-        /* UPLOAD OVERRIDE */
+        /* KENDO OVERRIDES */
         .k-upload { border-radius: 12px !important; border-color: var(--border) !important; }
         .k-dropzone { background: #fff !important; padding: 15px !important; }
 
-        /* --- MODAL LOADING --- */
+        /* MODAL LOADING */
         .modal-overlay {
             display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(5px);
@@ -212,12 +202,11 @@
 <div class="modal-overlay" id="loadingModal">
     <div class="loading-box">
         <div class="spinner" id="modalSpinner"></div>
-        
         <div class="modal-icon" id="iconSuccess">✅</div>
         <div class="modal-icon" id="iconError">❌</div>
 
         <div class="loading-text" id="modalTitle">Processing...</div>
-        <div class="loading-sub" id="modalSub">Please wait, AI is working.</div>
+        <div class="loading-sub" id="modalSub">Initial Connection...</div>
 
         <button class="btn-close-modal" id="btnCloseModal" onclick="closeModal()">Close</button>
     </div>
@@ -225,6 +214,7 @@
 
 <script>
     // --- KONFIGURASI BACKEND ---
+    // Gunakan IP Absolut VPS Anda
     const API_BASE_URL = "http://13.229.172.201:8000"; 
 
     // --- TABS LOGIC ---
@@ -252,45 +242,52 @@
         $("#loadingModal").fadeOut();
     }
 
-    // --- GLOBAL POLLING VARIABLE ---
+    // --- GLOBAL POLLING ENGINE ---
     let pollingInterval = null;
 
     function startPolling(contextName) {
         if(pollingInterval) clearInterval(pollingInterval);
         
+        // Interval lebih cepat (500ms) untuk responsivitas
         pollingInterval = setInterval(function() {
-            // Gunakan endpoint /progress + timestamp
+            // Anti-Cache: Tambahkan parameter nocache dengan angka random
             $.ajax({
-                url: API_BASE_URL + "/progress?t=" + new Date().getTime(),
+                url: API_BASE_URL + "/progress?nocache=" + Math.random(),
                 type: "GET",
                 cache: false,
                 success: function(data) {
-                    // console.log("Status:", data);
+                    console.log("Server Poll:", data); // Debugging di Console
                     
-                    // FIXED: Hanya update UI jika is_running === true
-                    // Ini mencegah UI menampilkan "100%" yang tertinggal dari proses sebelumnya
-                    if(data.is_running === true) {
-                        $("#modalTitle").text(contextName + ": " + data.progress + "%");
-                        $("#modalSub").text(data.message);
+                    // FIXED LOGIC:
+                    // Jika data JSON valid, kita update UI.
+                    // Kita tidak peduli apakah is_running true/false, selama ada pesan, kita tampilkan.
+                    // Ini memperbaiki masalah UI Stuck.
+                    
+                    if (data && data.message) {
+                         // Hanya update jika pesannya bukan "Idle" (default state)
+                         if (data.message !== "Idle") {
+                            $("#modalTitle").text(contextName + ": " + data.progress + "%");
+                            $("#modalSub").text(data.message);
+                         }
                     }
-                    
-                    // Logic khusus Training (Auto Stop)
+
+                    // Auto Stop Logic untuk Training
                     if(contextName === "Training") {
-                        if (!data.is_running && data.progress === 100) {
+                        if (data.progress === 100 && !data.is_running) {
                             clearInterval(pollingInterval);
                             showResult("success", "Training Complete!", "New AI models ready.");
                         }
-                        if (!data.is_running && data.message.includes("Error")) {
+                        if (data.progress === 0 && !data.is_running && data.message.includes("Error")) {
                             clearInterval(pollingInterval);
                             showResult("error", "Training Failed", data.message);
                         }
                     }
                 },
                 error: function(err) {
-                    console.warn("Polling error:", err);
+                    console.warn("Polling Network Error:", err);
                 }
             });
-        }, 1000); // Update tiap 1 detik
+        }, 500);
     }
 
     function showResult(type, title, sub) {
@@ -326,18 +323,16 @@
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
 
-            // 1. Show Modal & Start Polling
+            // 1. Show Modal & Reset UI
             $("#loadingModal").css("display", "flex").hide().fadeIn();
             $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
             $("#modalTitle").text("Connecting...");
-            $("#modalSub").text("Uploading file...");
+            $("#modalSub").text("Uploading file to server...");
 
-            // CLEANED: Tunda polling 2 detik & Tidak ada parameter isClean
-            setTimeout(function() {
-                startPolling("Processing");
-            }, 2000);
+            // 2. Start Polling IMMEDIATELY
+            startPolling("Processing");
 
-            // 2. Fetch Request (CLEAN URL)
+            // 3. Fetch Request (URL CLEANED: No cleansing params)
             fetch(API_BASE_URL + "/predict?report_type=" + reportType, { 
                 method: "POST", 
                 body: formData 
@@ -347,8 +342,7 @@
                 return res.blob(); 
             })
             .then(blob => {
-                if(pollingInterval) clearInterval(pollingInterval); // Stop polling
-                
+                if(pollingInterval) clearInterval(pollingInterval);
                 showResult("success", "Success!", "Report Downloaded.");
                 
                 var url = window.URL.createObjectURL(blob);
@@ -376,9 +370,9 @@
             $("#loadingModal").css("display", "flex").hide().fadeIn();
             $("#modalSpinner").show(); $(".modal-icon, #btnCloseModal").hide();
             $("#modalTitle").text("Retraining AI...");
-            $("#modalSub").text("Initializing...");
+            $("#modalSub").text("Initializing upload...");
 
-            // 2. Trigger Start (CLEAN URL)
+            // 2. Trigger Start (URL CLEANED: No cleansing params)
             fetch(API_BASE_URL + "/train", { method: "POST", body: formData })
             .then(res => res.json())
             .then(data => {
