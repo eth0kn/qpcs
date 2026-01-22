@@ -213,7 +213,7 @@
 </div>
 
 <script>
-    const API_BASE_URL = "http://localhost:8000"; 
+    const API_BASE_URL = "http://13.229.172.201:8000"; 
 
     // --- TABS LOGIC ---
     function switchTab(tab) {
