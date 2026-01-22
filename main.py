@@ -113,6 +113,14 @@ async def run_prediction(
     report_type: str = Query("daily"),
     enable_cleansing: bool = Query(False)
 ):
+    # Cek State
+    current_state = load_state()
+    if current_state["is_running"]:
+        raise HTTPException(status_code=400, detail="Server sedang sibuk (Training/Predicting).")
+
+    # Set State Awal
+    save_state(True, 0, "Upload selesai. Memulai Analisa...")
+
     temp_filename = f"temp_predict_{file.filename}"
     temp_path = os.path.join(DATASET_DIR, temp_filename)
     
@@ -120,14 +128,26 @@ async def run_prediction(
         with open(temp_path, "wb+") as fo:
             shutil.copyfileobj(file.file, fo)
             
-        output_path, error_msg = predict_excel_process(temp_path, report_type)
+        # --- DEFINISI CALLBACK PROGRESS UNTUK PREDIKSI ---
+        def update_predict_progress(pct, msg):
+            save_state(True, pct, msg)
+
+        # Panggil fungsi process dengan callback
+        output_path, error_msg = predict_excel_process(
+            temp_path, 
+            report_type, 
+            progress_callback=update_predict_progress # <--- Callback dipasang
+        )
         
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        if os.path.exists(temp_path): os.remove(temp_path)
             
         if not output_path:
+            save_state(False, 0, "Gagal Prediksi")
             raise HTTPException(status_code=500, detail=error_msg)
             
+        # Set State Selesai sebelum kirim file
+        save_state(False, 100, "Prediksi Selesai. Mendownload...")
+        
         return FileResponse(
             path=output_path, 
             filename=os.path.basename(output_path),
@@ -135,6 +155,6 @@ async def run_prediction(
         )
 
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        save_state(False, 0, f"Error: {str(e)}") # Reset state jika crash
+        if os.path.exists(temp_path): os.remove(temp_path)
         raise HTTPException(status_code=500, detail=str(e))

@@ -255,8 +255,18 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
 
     report(100, "Training Selesai.")
 
-def predict_excel_process(input_file_path, report_type='daily'):
+def predict_excel_process(input_file_path, report_type='daily', progress_callback=None):
+    """
+    Versi update dengan Progress Reporting Real-time.
+    """
     import datetime
+    
+    # Fungsi Helper Laporan Lokal
+    def report(p, m):
+        if progress_callback: progress_callback(p, m)
+        print(f"[PREDICT {p}%] {m}")
+
+    report(5, "Membaca File Excel...")
     
     # 1. READ
     try:
@@ -268,67 +278,76 @@ def predict_excel_process(input_file_path, report_type='daily'):
     if HEADER_KEYWORD not in df.columns:
         return None, f"Kolom '{HEADER_KEYWORD}' tidak ditemukan."
 
-    # 2. SIAPKAN KOLOM KONTEKS & FILTER LOGIC
-    # Gabungkan kolom untuk otak AI
+    report(15, "Filtering Data & Garbage...")
+    # 2. FILTER GARBAGE
+    df[HEADER_KEYWORD] = df[HEADER_KEYWORD].fillna("").astype(str).str.strip()
+    invalid_values = ["", "0", "nan", "null", "-", "0.0"]
+    mask_valid = ~df[HEADER_KEYWORD].str.lower().isin(invalid_values)
+    mask_len = df[HEADER_KEYWORD].str.len() > 1
+    
+    # Context Fusion
     df = prepare_ai_input(df)
     
-    # Identifikasi Baris Valid vs Sampah
-    invalid_values = ["", "0", "nan", "null", "-", "0.0"]
-    mask_invalid = df['AI_INPUT_COMBINED'].str.lower().isin(invalid_values) | (df['AI_INPUT_COMBINED'].str.len() < 2)
-    
-    # Pisahkan Data: Valid untuk AI, Invalid untuk bypass
-    # PENTING: Kita tidak drop row, hanya memisahkan index
-    df_valid = df[~mask_invalid].copy()
-    
-    # 3. PASTIKAN KOLOM OUTPUT ADA
+    # 3. FILTER COLUMNS
     for col in FINAL_COLUMNS_ORDER:
         if col not in df.columns: df[col] = "" 
     
-    # Init kolom target dengan strip "-" (Default value)
+    df_final = df[FINAL_COLUMNS_ORDER].copy()
+    
+    # INIT TARGETS
     targets_all = TARGETS_DEFECT + (TARGETS_CATEGORY if report_type == 'monthly' else [])
-    for t in targets_all:
-        df[t] = "-"
+    for t in targets_all: df_final[t] = "-"
 
-    # 4. PREDICT DEFECT (Hanya untuk baris Valid)
-    if not df_valid.empty:
-        X_pred = df_valid['AI_INPUT_COMBINED'].tolist()
-        
+    # Ambil data valid untuk AI
+    df_valid_idx = df[mask_valid & mask_len].index
+    X_pred_raw = df.loc[df_valid_idx, 'AI_INPUT_COMBINED'].tolist()
+
+    report(30, f"Loading Model AI & Encoding {len(X_pred_raw)} baris...")
+
+    # 4. PREDICT DEFECT
+    if len(X_pred_raw) > 0:
         try:
             model_def_path = f'{MODEL_DIR}model_defect.pkl'
-            if os.path.exists(model_def_path):
-                pipeline_def = joblib.load(model_def_path)
-                y_pred_def = pipeline_def.predict(X_pred)
-                
-                # Update DataFrame Utama pada index yang valid saja
-                df_res_def = pd.DataFrame(y_pred_def, columns=TARGETS_DEFECT, index=df_valid.index)
-                df.update(df_res_def) # Update kolom Defect1-3 dengan hasil AI
+            if not os.path.exists(model_def_path): return None, "Model Defect belum ada."
+            
+            pipeline_def = joblib.load(model_def_path)
+            
+            # Predict
+            report(50, "Menjalankan Prediksi Defect...")
+            y_pred_def = pipeline_def.predict(X_pred_raw)
+            
+            # Map ke DF Final
+            df_res_def = pd.DataFrame(y_pred_def, columns=TARGETS_DEFECT, index=df_valid_idx)
+            df_final.update(df_res_def)
+            
         except Exception as e: return None, f"Error Model Defect: {e}"
 
-        # 5. PREDICT CATEGORY (Hanya Monthly & Valid)
+        # 5. PREDICT CATEGORY
         if report_type == 'monthly':
             try:
+                report(70, "Menjalankan Prediksi Category (Monthly)...")
                 model_cat_path = f'{MODEL_DIR}model_oz.pkl'
-                if os.path.exists(model_cat_path):
-                    pipeline_cat = joblib.load(model_cat_path)
-                    y_pred_cat = pipeline_cat.predict(X_pred)
-                    
-                    df_res_cat = pd.DataFrame(y_pred_cat, columns=TARGETS_CATEGORY, index=df_valid.index)
-                    df.update(df_res_cat)
+                if not os.path.exists(model_cat_path): return None, "Model Category belum ada."
+                
+                pipeline_cat = joblib.load(model_cat_path)
+                y_pred_cat = pipeline_cat.predict(X_pred_raw)
+                
+                df_res_cat = pd.DataFrame(y_pred_cat, columns=TARGETS_CATEGORY, index=df_valid_idx)
+                df_final.update(df_res_cat)
             except Exception as e: return None, f"Error Model Category: {e}"
+    else:
+        report(90, "Tidak ada data valid untuk diprediksi (Semua kosong/sampah).")
 
-    # 6. EXPORT (Buang kolom bantuan AI_INPUT_COMBINED, Sisakan format asli)
-    # Gunakan FINAL_COLUMNS_ORDER + Kolom Target
+    # 6. EXPORT
+    report(90, "Finalizing & Styling Excel...")
+    
     final_cols = FINAL_COLUMNS_ORDER + TARGETS_DEFECT
-    if report_type == 'monthly':
-        final_cols += TARGETS_CATEGORY
-        
-    # Pastikan kolom output ada di df (jika belum ada, buat kosong)
+    if report_type == 'monthly': final_cols += TARGETS_CATEGORY
     for c in final_cols:
-        if c not in df.columns: df[c] = ""
+        if c not in df_final.columns: df_final[c] = ""
         
-    df_final = df[final_cols].copy()
+    df_export = df_final[final_cols].copy()
 
-    # 7. SAVE EXCEL
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_filename = f"RESULT_{report_type.upper()}_{timestamp}.xlsx"
     output_path = os.path.join("datasets", output_filename)
@@ -341,9 +360,10 @@ def predict_excel_process(input_file_path, report_type='daily'):
         worksheet = workbook.add_worksheet(sheet_name)
         writer.sheets[sheet_name] = worksheet
         
-        apply_custom_layout(writer, df_final, sheet_name, report_type)
+        apply_custom_layout(writer, df_export, sheet_name, report_type)
         writer.close()
     except Exception as e:
         return None, f"Gagal styling excel: {str(e)}"
 
+    report(100, "Selesai. Mengirim File...")
     return output_path, "Success"
