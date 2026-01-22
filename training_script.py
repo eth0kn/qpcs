@@ -11,7 +11,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator, TransformerMixin
 
 # ==============================================================================
-# CONFIGURATION & OPTIMIZATION (8 CPU / 16GB RAM)
+# CONFIGURATION & OPTIMIZATION
 # ==============================================================================
 DATASET_PATH = 'datasets/training_data.xlsx'
 MODEL_DIR = 'models/'
@@ -19,12 +19,23 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 MODEL_NAME = 'BAAI/bge-m3' 
 
-# CONFIG SHEET NAMES
+# CONFIG SHEET NAMES (Sesuaikan dengan nama sheet di Raw Data User)
 SHEET_DAILY = "PROCESS (DEFECT)"
 SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
 
 # Kunci untuk Auto Detect Header
 HEADER_KEYWORD = "PROC_DETAIL_E"
+
+# URUTAN KOLOM OUTPUT YANG DIINGINKAN (Sesuai Expected Result)
+FINAL_COLUMNS_ORDER = [
+    'DATA_TYPE', 'RCPT_NO_ORD_NO', 'CLOSE_DT_RTN_DT', 'SALES_MODEL_SUFFIX', 
+    'SERIAL_NO', 'PARTS_DESC1', 'PARTS_DESC2', 'PARTS_DESC3', 
+    'PROC_DETAIL_E', 'ASC_REMARK_E'
+]
+
+# TARGET PREDIKSI
+TARGETS_DEFECT = ['Defect1', 'Defect2', 'Defect3']
+TARGETS_CATEGORY = ['SVC TYPE', 'DETAIL REASON']
 
 # --- OPTIMASI CPU ---
 torch.set_num_threads(8) 
@@ -40,40 +51,44 @@ def report(progress, message):
 
 def find_header_index(file_path, sheet_name, keyword):
     try:
+        # Coba baca sheet spesifik
         df_temp = pd.read_excel(file_path, sheet_name=sheet_name, header=None, nrows=30)
-        for idx, row in df_temp.iterrows():
-            row_str = row.astype(str).str.upper().tolist()
-            if keyword.upper() in row_str:
-                print(f"   > Header '{keyword}' ditemukan di baris ke-{idx + 1}")
-                return idx
-        return 1
-    except Exception as e:
-        print(f"   ! Error cari header: {str(e)}")
-        return 1
+    except:
+        # Fallback: Coba baca sheet pertama jika sheet name tidak ketemu
+        try:
+            df_temp = pd.read_excel(file_path, index_col=None, header=None, nrows=30)
+        except Exception as e:
+            print(f"   ! Gagal baca header: {e}")
+            return 1
+
+    for idx, row in df_temp.iterrows():
+        row_str = row.astype(str).str.upper().tolist()
+        if keyword.upper() in row_str:
+            print(f"   > Header '{keyword}' ditemukan di baris ke-{idx + 1}")
+            return idx
+    return 1
 
 def load_and_validate_data(file_path, sheet_name):
-    if not os.path.exists(file_path):
-        return pd.DataFrame()
+    """Load data untuk Training"""
+    if not os.path.exists(file_path): return pd.DataFrame()
 
     header_idx = find_header_index(file_path, sheet_name, HEADER_KEYWORD)
-    
     try:
         df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_idx)
-    except Exception as e:
-        print(f"Error reading sheet {sheet_name}: {e}")
-        return pd.DataFrame()
+    except:
+        # Fallback sheet pertama
+        df = pd.read_excel(file_path, header=header_idx)
 
-    if HEADER_KEYWORD not in df.columns:
-        return pd.DataFrame()
+    if HEADER_KEYWORD not in df.columns: return pd.DataFrame()
 
+    # Validasi Basic
     df[HEADER_KEYWORD] = df[HEADER_KEYWORD].fillna("").astype(str)
-    # Filter data kosong/tidak valid
     df = df[df[HEADER_KEYWORD].str.strip().str.len() > 1]
     
     return df
 
 # ==============================================================================
-# AI EMBEDDER (OPTIMIZED)
+# AI EMBEDDER
 # ==============================================================================
 class BertEmbedder(BaseEstimator, TransformerMixin):
     def __init__(self, model_name):
@@ -93,195 +108,236 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         return self.model.encode(X, batch_size=128, show_progress_bar=True)
 
 # ==============================================================================
-# STYLING ENGINE (XlsxWriter)
+# ADVANCED STYLING ENGINE (XlsxWriter)
 # ==============================================================================
-def apply_professional_style(writer, df, sheet_name, report_type):
+def apply_custom_layout(writer, df, sheet_name, report_type):
     """
-    Fungsi ini akan melukis Excel agar rapi, berwarna, dan professional.
+    Melakukan formatting presisi: Row 2, Col B, Merge Title, Colors.
     """
     workbook = writer.book
     worksheet = writer.sheets[sheet_name]
     
-    # 1. DEFINISI STYLE
-    # Header: Biru Tua, Teks Putih Bold
-    header_fmt = workbook.add_format({
-        'bold': True, 'text_wrap': True, 'valign': 'vcenter', 'align': 'center',
-        'fg_color': '#203764', 'font_color': 'white', 'border': 1
-    })
+    # --- 1. DEFINISI FORMAT WARNA ---
     
-    # Body Normal: Border tipis, text wrap (untuk deskripsi panjang)
-    body_fmt = workbook.add_format({
-        'border': 1, 'valign': 'top', 'text_wrap': True, 'font_size': 11
-    })
-    
-    # Body Center: Untuk NO, Kode Symptom (agar rapi ditengah)
-    center_fmt = workbook.add_format({
-        'border': 1, 'valign': 'top', 'align': 'center', 'font_size': 11
-    })
-    
-    # Highlight AI (Kuning Muda): Untuk kolom hasil prediksi
-    ai_fmt = workbook.add_format({
-        'border': 1, 'valign': 'top', 'text_wrap': True, 
-        'fg_color': '#FFFFCC', 'font_size': 11, 'bold': False
+    # Title Header (Biru #4472C4, Putih, Bold)
+    title_fmt = workbook.add_format({
+        'bold': True, 'fg_color': '#4472C4', 'font_color': 'white',
+        'align': 'center', 'valign': 'vcenter', 'font_size': 14, 'border': 1
     })
 
-    # 2. SET LEBAR KOLOM & FORMAT
-    # Loop semua kolom untuk menentukan format
-    for col_num, col_name in enumerate(df.columns):
-        col_name_upper = str(col_name).upper()
+    # Header Standar (Abu-abu muda biar rapi)
+    header_std_fmt = workbook.add_format({
+        'bold': True, 'fg_color': '#F2F2F2', 'border': 1, 
+        'align': 'center', 'valign': 'vcenter', 'text_wrap': True
+    })
+
+    # Header Defect (Kuning #FFFF00)
+    header_defect_fmt = workbook.add_format({
+        'bold': True, 'fg_color': '#FFFF00', 'border': 1, 
+        'align': 'center', 'valign': 'vcenter'
+    })
+
+    # Header Category (Orange #FFC000) - Khusus Monthly
+    header_cat_fmt = workbook.add_format({
+        'bold': True, 'fg_color': '#FFC000', 'border': 1, 
+        'align': 'center', 'valign': 'vcenter'
+    })
+
+    # Body Data
+    body_fmt = workbook.add_format({'border': 1, 'valign': 'top', 'text_wrap': True})
+    center_fmt = workbook.add_format({'border': 1, 'valign': 'top', 'align': 'center'})
+
+    # Conditional Formats (IH=Merah, OZ=Hijau, MS=Kuning)
+    # Note: MS Kuning font hitam agar terbaca. IH/OZ Font Putih.
+    fmt_ih = workbook.add_format({'bg_color': '#FF0000', 'font_color': 'white'})
+    fmt_oz = workbook.add_format({'bg_color': '#00B050', 'font_color': 'white'})
+    fmt_ms = workbook.add_format({'bg_color': '#FFFF00', 'font_color': 'black'}) 
+
+    # --- 2. SETUP POSISI (Start Row 2, Col B) ---
+    START_ROW = 1 # Baris ke-2 (Index 1)
+    START_COL = 1 # Kolom B (Index 1)
+    
+    # --- 3. TULIS JUDUL UTAMA (MERGED) ---
+    title_text = ""
+    last_col_idx = START_COL + len(df.columns) - 1
+    
+    if report_type == 'daily':
+        title_text = "DEFECT CLASSIFICATION (DAILY 1X PER DAY)"
+    else:
+        title_text = "OZ/MS/IH CATEGORY (MONTHLY 1X PER MONTH)"
+    
+    # Merge Range: (FirstRow, FirstCol, LastRow, LastCol)
+    worksheet.merge_range(START_ROW, START_COL, START_ROW, last_col_idx, title_text, title_fmt)
+    
+    # --- 4. TULIS HEADER TABEL (ROW 3 / Index 2) ---
+    header_row_idx = START_ROW + 1
+    
+    for i, col_name in enumerate(df.columns):
+        col_idx = START_COL + i
+        c_name = str(col_name).upper()
         
-        # A. Tentukan Lebar Kolom
-        if col_name_upper == "NO":
-            width = 5
-            style = center_fmt
-        elif "SYMPTOM" in col_name_upper and "DESC" not in col_name_upper: # Kode Symptom
-            width = 10
-            style = center_fmt
-        elif "DESC" in col_name_upper or "DETAIL" in col_name_upper or "REMARK" in col_name_upper:
-            width = 45 # Kolom Deskripsi Lebar
-            style = body_fmt
-        elif "DEFECT" in col_name_upper or "SVC TYPE" in col_name_upper or "REASON" in col_name_upper:
-            width = 20
-            style = ai_fmt # Pakai warna highlight AI
+        # Tentukan Style Header
+        if "DEFECT" in c_name:
+            style = header_defect_fmt
+        elif "SVC TYPE" in c_name or "REASON" in c_name:
+            style = header_cat_fmt
         else:
-            width = 15
-            style = body_fmt
-
-        # B. Terapkan Style ke Kolom
-        # set_column(first_col, last_col, width, cell_format)
-        worksheet.set_column(col_num, col_num, width, style)
+            style = header_std_fmt
+            
+        worksheet.write(header_row_idx, col_idx, col_name, style)
         
-        # C. Tulis Ulang Header dengan Style Header
-        worksheet.write(0, col_num, col_name, header_fmt)
+        # Atur Lebar Kolom
+        if "DESC" in c_name or "DETAIL" in c_name or "REMARK" in c_name:
+            worksheet.set_column(col_idx, col_idx, 40) # Lebar untuk deskripsi
+        elif "NO" in c_name or "DATE" in c_name:
+             worksheet.set_column(col_idx, col_idx, 15)
+        else:
+             worksheet.set_column(col_idx, col_idx, 20)
 
-    # 3. FREEZE HEADER & FILTER
-    worksheet.freeze_panes(1, 0) # Bekukan baris 1
-    worksheet.autofilter(0, 0, len(df), len(df.columns) - 1) # Aktifkan Filter
+    # --- 5. TULIS DATA BODY (ROW 4 dst) ---
+    data_start_row = header_row_idx + 1
+    
+    # Ubah DF ke list of list agar cepat
+    data_values = df.values.tolist()
+    
+    for r_idx, row_data in enumerate(data_values):
+        current_row = data_start_row + r_idx
+        for c_idx, cell_value in enumerate(row_data):
+            current_col = START_COL + c_idx
+            
+            # Cek apakah kolom perlu Center Align
+            col_head = df.columns[c_idx]
+            if "DATA_TYPE" in col_head or "NO" in col_head:
+                worksheet.write(current_row, current_col, cell_value, center_fmt)
+            else:
+                worksheet.write(current_row, current_col, cell_value, body_fmt)
+
+    # --- 6. APPLY CONDITIONAL FORMATTING (Khusus Monthly) ---
+    if report_type == 'monthly' and 'SVC TYPE' in df.columns:
+        # Cari index kolom SVC TYPE
+        svc_col_idx = df.columns.get_loc('SVC TYPE') + START_COL
+        
+        # Convert index ke huruf excel (misal 5 -> F)
+        # Cara gampang: Range dari row data pertama sampai terakhir
+        last_row = data_start_row + len(df) - 1
+        
+        # Apply Logic
+        # xlsxwriter butuh range (first_row, first_col, last_row, last_col)
+        worksheet.conditional_format(data_start_row, svc_col_idx, last_row, svc_col_idx,
+                                     {'type': 'cell', 'criteria': 'equal to', 'value': '"IH"', 'format': fmt_ih})
+        worksheet.conditional_format(data_start_row, svc_col_idx, last_row, svc_col_idx,
+                                     {'type': 'cell', 'criteria': 'equal to', 'value': '"OZ"', 'format': fmt_oz})
+        worksheet.conditional_format(data_start_row, svc_col_idx, last_row, svc_col_idx,
+                                     {'type': 'cell', 'criteria': 'equal to', 'value': '"MS"', 'format': fmt_ms})
+
+    # Freeze Panes (Bekukan Header Table)
+    worksheet.freeze_panes(data_start_row, 0) 
 
 # ==============================================================================
-# MAIN LOGIC
+# MAIN LOGIC (TRAIN & PREDICT)
 # ==============================================================================
 
 def train_ai_advanced(enable_cleansing=False, progress_callback=None):
+    # Logika Training Tetap Sama
     global report
     if progress_callback:
-        def report(p, m):
-            progress_callback(p, m)
-            print(f"[{p}%] {m}")
+        def report(p, m): progress_callback(p, m); print(f"[{p}%] {m}")
 
     report(10, "Menganalisa Struktur File & Load Data...")
 
     df_defect = load_and_validate_data(DATASET_PATH, SHEET_DAILY)
     df_oz = load_and_validate_data(DATASET_PATH, SHEET_MONTHLY)
 
-    targets_defect = ['Defect1', 'Defect2', 'Defect3']
-    targets_oz = ['SVC TYPE', 'DETAIL REASON']
-
-    # --- TRAIN MODEL DEFECT ---
+    # --- TRAIN DEFECT ---
     if not df_defect.empty:
-        report(20, f"Training Model Defect ({len(df_defect)} data)...")
-        X = df_defect[HEADER_KEYWORD].tolist()
-        y = df_defect[targets_defect].fillna("-")
-        
-        pipeline = Pipeline([
-            ('embedder', BertEmbedder(MODEL_NAME)),
-            ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=-1)))
-        ])
-        
-        pipeline.fit(X, y)
-        report(40, "Menyimpan Model Defect...")
+        report(20, f"Training Model Defect ({len(df_defect)} rows)...")
+        pipeline = Pipeline([('embedder', BertEmbedder(MODEL_NAME)), ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=-1)))])
+        pipeline.fit(df_defect[HEADER_KEYWORD].tolist(), df_defect[TARGETS_DEFECT].fillna("-"))
         joblib.dump(pipeline, f'{MODEL_DIR}model_defect.pkl')
-        del pipeline, X, y
-        gc.collect()
-    else:
-        report(20, "Skip Model Defect (Data Kosong)")
-
-    # --- TRAIN MODEL CATEGORY ---
+    
+    # --- TRAIN CATEGORY ---
     if not df_oz.empty:
-        report(60, f"Training Model Category ({len(df_oz)} data)...")
-        X = df_oz[HEADER_KEYWORD].tolist()
-        y = df_oz[targets_oz].fillna("-")
-        
-        pipeline_oz = Pipeline([
-            ('embedder', BertEmbedder(MODEL_NAME)),
-            ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=-1)))
-        ])
-        
-        pipeline_oz.fit(X, y)
-        report(80, "Menyimpan Model Category...")
+        report(60, f"Training Model Category ({len(df_oz)} rows)...")
+        pipeline_oz = Pipeline([('embedder', BertEmbedder(MODEL_NAME)), ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=-1)))])
+        pipeline_oz.fit(df_oz[HEADER_KEYWORD].tolist(), df_oz[TARGETS_CATEGORY].fillna("-"))
         joblib.dump(pipeline_oz, f'{MODEL_DIR}model_oz.pkl')
-        del pipeline_oz, X, y
-        gc.collect()
-    else:
-        report(60, "Skip Model Category (Data Kosong)")
 
     report(100, "Training Selesai.")
 
 def predict_excel_process(input_file_path, report_type='daily'):
     import datetime
     
-    # 1. Load Model
+    # 1. LOAD DATA & HEADER
     try:
-        if report_type == 'daily':
-            model_path = f'{MODEL_DIR}model_defect.pkl'
-            # Urutan kolom sesuai format yang diminta user
-            targets = ['Defect1', 'Defect2', 'Defect3']
-        else: 
-            model_path = f'{MODEL_DIR}model_oz.pkl'
-            targets = ['SVC TYPE', 'DETAIL REASON']
-            
-        if not os.path.exists(model_path):
-            return None, "Model belum ditraining."
-
-        pipeline = joblib.load(model_path)
-            
-    except Exception as e:
-        return None, str(e)
-
-    # 2. Load Data
-    try:
-        xls = pd.ExcelFile(input_file_path)
-        sheet_name = xls.sheet_names[0]
-        header_idx = find_header_index(input_file_path, sheet_name, HEADER_KEYWORD)
-        df = pd.read_excel(input_file_path, sheet_name=sheet_name, header=header_idx)
-        
-        if HEADER_KEYWORD not in df.columns:
-            return None, f"Kolom '{HEADER_KEYWORD}' tidak ditemukan."
-            
+        header_idx = find_header_index(input_file_path, None, HEADER_KEYWORD)
+        df = pd.read_excel(input_file_path, header=header_idx)
     except Exception as e:
         return None, f"Gagal baca file: {str(e)}"
 
-    # 3. Prediksi
+    if HEADER_KEYWORD not in df.columns:
+        return None, f"Kolom '{HEADER_KEYWORD}' tidak ditemukan."
+
+    # 2. FILTER & URUTKAN KOLOM (Ambil hanya yg penting)
+    # Kita pastikan kolom yg diminta ada. Jika tidak ada di raw, kita buat kosong.
+    for col in FINAL_COLUMNS_ORDER:
+        if col not in df.columns:
+            df[col] = "" # Isi kosong jika tidak ketemu di raw
+    
+    # Buat DF baru hanya dengan kolom yg diminta
+    df_final = df[FINAL_COLUMNS_ORDER].copy()
+    
+    # 3. PREPARE INPUT AI
     X_pred = df[HEADER_KEYWORD].fillna("").astype(str).tolist()
-    
+
+    # 4. RUN PREDICTION (DEFECT - Selalu jalan)
     try:
-        y_pred = pipeline.predict(X_pred)
-    except Exception as e:
-        return None, f"Error prediksi: {str(e)}"
-
-    # 4. Susun Hasil ke DataFrame
-    y_pred_df = pd.DataFrame(y_pred, columns=targets)
-    
-    # Masukkan hasil prediksi ke dataframe utama
-    for col in targets:
-        df[col] = y_pred_df[col]
+        model_def_path = f'{MODEL_DIR}model_defect.pkl'
+        if not os.path.exists(model_def_path): return None, "Model Defect belum ada."
         
-    # Tambahkan kolom RESULT (Kosong) jika Daily, sesuai format
-    if report_type == 'daily' and 'RESULT' not in df.columns:
-        df['RESULT'] = ""
+        pipeline_def = joblib.load(model_def_path)
+        y_pred_def = pipeline_def.predict(X_pred)
+        
+        # Masukkan hasil ke DF
+        df_res_def = pd.DataFrame(y_pred_def, columns=TARGETS_DEFECT)
+        for c in TARGETS_DEFECT: df_final[c] = df_res_def[c]
+        
+    except Exception as e: return None, f"Error Model Defect: {e}"
 
-    # 5. Export dengan Styling (XlsxWriter)
+    # 5. RUN PREDICTION (CATEGORY - Hanya Monthly)
+    if report_type == 'monthly':
+        try:
+            model_cat_path = f'{MODEL_DIR}model_oz.pkl'
+            if not os.path.exists(model_cat_path): return None, "Model Category belum ada."
+            
+            pipeline_cat = joblib.load(model_cat_path)
+            y_pred_cat = pipeline_cat.predict(X_pred)
+            
+            # Masukkan hasil ke DF
+            df_res_cat = pd.DataFrame(y_pred_cat, columns=TARGETS_CATEGORY)
+            for c in TARGETS_CATEGORY: df_final[c] = df_res_cat[c]
+            
+        except Exception as e: return None, f"Error Model Category: {e}"
+
+    # 6. EXPORT DENGAN LAYOUT KHUSUS
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"RESULT_{report_type}_{timestamp}.xlsx"
+    output_filename = f"RESULT_{report_type.upper()}_{timestamp}.xlsx"
     output_path = os.path.join("datasets", output_filename)
     
     try:
-        # Gunakan engine xlsxwriter
+        # Gunakan XlsxWriter
         writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
-        df.to_excel(writer, index=False, sheet_name='Result')
+        sheet_name = 'Defect Classification' if report_type == 'daily' else 'OZ,MS,IH CATEGORY'
         
-        # Panggil fungsi styling
-        apply_professional_style(writer, df, 'Result', report_type)
+        # Tulis data ke memory buffer xlsxwriter (tanpa header dulu, header kita lukis manual)
+        # Kita skip penulisan via pandas to_excel biasa agar kita bisa kontrol posisi start row/col
+        # Tapi untuk memudahkan, kita pakai to_excel tapi startrow=3
+        
+        # PENTING: Kita kirim data kosong ke to_excel hanya untuk init sheet, 
+        # lalu kita lukis manual semua isinya di fungsi apply_custom_layout
+        # agar kontrol penuh (pandas to_excel kadang menimpa format).
+        
+        # Cara terbaik: Biarkan fungsi apply_custom_layout menangani penulisan data dan header.
+        apply_custom_layout(writer, df_final, sheet_name, report_type)
         
         writer.close()
     except Exception as e:
