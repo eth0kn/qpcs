@@ -19,14 +19,14 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 MODEL_NAME = 'BAAI/bge-m3' 
 
-# CONFIG SHEET NAMES (Sesuaikan dengan nama sheet di Raw Data User)
+# CONFIG SHEET NAMES
 SHEET_DAILY = "PROCESS (DEFECT)"
 SHEET_MONTHLY = "PROCESS (OZ,MS,IH)"
 
 # Kunci untuk Auto Detect Header
 HEADER_KEYWORD = "PROC_DETAIL_E"
 
-# URUTAN KOLOM OUTPUT YANG DIINGINKAN
+# URUTAN KOLOM OUTPUT
 FINAL_COLUMNS_ORDER = [
     'DATA_TYPE', 'RCPT_NO_ORD_NO', 'CLOSE_DT_RTN_DT', 'SALES_MODEL_SUFFIX', 
     'SERIAL_NO', 'PARTS_DESC1', 'PARTS_DESC2', 'PARTS_DESC3', 
@@ -50,11 +50,7 @@ def report(progress, message):
     print(f"[PROGRESS {progress}%] {message}")
 
 def find_header_index(file_path, sheet_name, keyword):
-    """
-    Mencari lokasi header dengan handling sheet None dan return Dict.
-    """
     target_sheet = sheet_name if sheet_name is not None else 0
-
     try:
         df_temp = pd.read_excel(file_path, sheet_name=target_sheet, header=None, nrows=30)
     except:
@@ -64,9 +60,7 @@ def find_header_index(file_path, sheet_name, keyword):
             print(f"   ! Gagal baca header: {e}")
             return 1
 
-    # Safety: Jika pandas mengembalikan dict, ambil value pertama
-    if isinstance(df_temp, dict):
-        df_temp = list(df_temp.values())[0]
+    if isinstance(df_temp, dict): df_temp = list(df_temp.values())[0]
 
     for idx, row in df_temp.iterrows():
         row_str = row.astype(str).str.upper().tolist()
@@ -76,6 +70,9 @@ def find_header_index(file_path, sheet_name, keyword):
     return 1
 
 def load_and_validate_data(file_path, sheet_name):
+    """
+    Load data dengan FILTER KETAT: Hapus NaN, Blank, dan "0".
+    """
     if not os.path.exists(file_path): return pd.DataFrame()
 
     header_idx = find_header_index(file_path, sheet_name, HEADER_KEYWORD)
@@ -86,8 +83,29 @@ def load_and_validate_data(file_path, sheet_name):
 
     if HEADER_KEYWORD not in df.columns: return pd.DataFrame()
 
-    df[HEADER_KEYWORD] = df[HEADER_KEYWORD].fillna("").astype(str)
-    df = df[df[HEADER_KEYWORD].str.strip().str.len() > 1]
+    # --- FILTERING OPTIMIZATION ---
+    # 1. Convert ke string
+    df[HEADER_KEYWORD] = df[HEADER_KEYWORD].fillna("").astype(str).str.strip()
+    
+    # 2. Hapus baris jika PROC_DETAIL_E adalah:
+    # - Kosong ("")
+    # - String "0"
+    # - String "nan" (case insensitive)
+    # - String "-"
+    invalid_values = ["", "0", "nan", "null", "-", "0.0"]
+    mask_valid = ~df[HEADER_KEYWORD].str.lower().isin(invalid_values)
+    
+    # 3. Hapus juga jika panjang string < 2 karakter (misal cuma titik ".")
+    mask_len = df[HEADER_KEYWORD].str.len() > 1
+    
+    # Terapkan Filter
+    initial_len = len(df)
+    df = df[mask_valid & mask_len]
+    final_len = len(df)
+    
+    if initial_len > final_len:
+        print(f"   > Dibuang {initial_len - final_len} baris sampah (0/Blank/NaN) dari {sheet_name}")
+    
     return df
 
 # ==============================================================================
@@ -98,8 +116,7 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         self.model_name = model_name
         self.model = None
 
-    def fit(self, X, y=None):
-        return self
+    def fit(self, X, y=None): return self
 
     def transform(self, X):
         if self.model is None:
@@ -111,42 +128,59 @@ class BertEmbedder(BaseEstimator, TransformerMixin):
         return self.model.encode(X, batch_size=128, show_progress_bar=True)
 
 # ==============================================================================
-# ADVANCED STYLING ENGINE (XlsxWriter)
+# ADVANCED STYLING ENGINE (NO WRAP VERSION)
 # ==============================================================================
 def apply_custom_layout(writer, df, sheet_name, report_type):
-    """
-    Melakukan formatting presisi: Row 2, Col B, Merge Title, Colors.
-    """
     workbook = writer.book
     worksheet = writer.sheets[sheet_name]
     
-    # --- STYLE DEFINITIONS ---
+    # --- STYLE DEFINITIONS (TEXT_WRAP = FALSE) ---
+    
+    # Title Header
     title_fmt = workbook.add_format({
         'bold': True, 'fg_color': '#4472C4', 'font_color': 'white',
         'align': 'center', 'valign': 'vcenter', 'font_size': 14, 'border': 1
     })
+
+    # Header Standar
     header_std_fmt = workbook.add_format({
         'bold': True, 'fg_color': '#F2F2F2', 'border': 1, 
-        'align': 'center', 'valign': 'vcenter', 'text_wrap': True
+        'align': 'center', 'valign': 'vcenter', 'text_wrap': False # No Wrap
     })
+
+    # Header Defect (Kuning)
     header_defect_fmt = workbook.add_format({
         'bold': True, 'fg_color': '#FFFF00', 'border': 1, 
         'align': 'center', 'valign': 'vcenter'
     })
+
+    # Header Category (Orange)
     header_cat_fmt = workbook.add_format({
         'bold': True, 'fg_color': '#FFC000', 'border': 1, 
         'align': 'center', 'valign': 'vcenter'
     })
-    body_fmt = workbook.add_format({'border': 1, 'valign': 'top', 'text_wrap': True})
-    center_fmt = workbook.add_format({'border': 1, 'valign': 'top', 'align': 'center'})
 
+    # Body Data (NO WRAP - Uniform Height)
+    body_fmt = workbook.add_format({
+        'border': 1, 'valign': 'top', 
+        'text_wrap': False, # PENTING: Matikan Wrap
+        'align': 'left'
+    })
+    
+    # Center Data
+    center_fmt = workbook.add_format({
+        'border': 1, 'valign': 'top', 'align': 'center',
+        'text_wrap': False
+    })
+
+    # Conditional Formats
     fmt_ih = workbook.add_format({'bg_color': '#FF0000', 'font_color': 'white'})
     fmt_oz = workbook.add_format({'bg_color': '#00B050', 'font_color': 'white'})
     fmt_ms = workbook.add_format({'bg_color': '#FFFF00', 'font_color': 'black'}) 
 
     # --- SETUP POSISI ---
-    START_ROW = 1 # Baris 2
-    START_COL = 1 # Kolom B
+    START_ROW = 1 
+    START_COL = 1 
     
     # --- TITLE ---
     title_text = "DEFECT CLASSIFICATION (DAILY 1X PER DAY)" if report_type == 'daily' else "OZ/MS/IH CATEGORY (MONTHLY 1X PER MONTH)"
@@ -165,9 +199,9 @@ def apply_custom_layout(writer, df, sheet_name, report_type):
             
         worksheet.write(header_row_idx, col_idx, col_name, style)
         
-        # Width
+        # Width (Lebih lebar sedikit karena no wrap)
         if "DESC" in c_name or "DETAIL" in c_name or "REMARK" in c_name:
-            worksheet.set_column(col_idx, col_idx, 40)
+            worksheet.set_column(col_idx, col_idx, 50) # Cukup lebar tapi fixed
         elif "NO" in c_name or "DATE" in c_name:
              worksheet.set_column(col_idx, col_idx, 15)
         else:
@@ -183,6 +217,7 @@ def apply_custom_layout(writer, df, sheet_name, report_type):
         for c_idx, cell_value in enumerate(row_data):
             current_col = START_COL + c_idx
             col_head = df.columns[c_idx]
+            
             if "DATA_TYPE" in col_head or "NO" in col_head:
                 worksheet.write(current_row, current_col, cell_value, center_fmt)
             else:
@@ -238,14 +273,24 @@ def predict_excel_process(input_file_path, report_type='daily'):
     if HEADER_KEYWORD not in df.columns:
         return None, f"Kolom '{HEADER_KEYWORD}' tidak ditemukan."
 
-    # 2. FILTER COLUMNS
+    # 2. FILTER GARBAGE (0/NaN) SEBELUM PREDIKSI
+    # Logika yang sama dengan Training: Buang data sampah
+    df[HEADER_KEYWORD] = df[HEADER_KEYWORD].fillna("").astype(str).str.strip()
+    invalid_values = ["", "0", "nan", "null", "-", "0.0"]
+    mask_valid = ~df[HEADER_KEYWORD].str.lower().isin(invalid_values)
+    mask_len = df[HEADER_KEYWORD].str.len() > 1
+    
+    # Simpan Data Bersih
+    df = df[mask_valid & mask_len].copy()
+    
+    # 3. FILTER COLUMNS
     for col in FINAL_COLUMNS_ORDER:
         if col not in df.columns: df[col] = "" 
     
     df_final = df[FINAL_COLUMNS_ORDER].copy()
-    X_pred = df[HEADER_KEYWORD].fillna("").astype(str).tolist()
+    X_pred = df[HEADER_KEYWORD].tolist() # Data sudah bersih string
 
-    # 3. PREDICT DEFECT
+    # 4. PREDICT DEFECT
     try:
         model_def_path = f'{MODEL_DIR}model_defect.pkl'
         if not os.path.exists(model_def_path): return None, "Model Defect belum ada."
@@ -253,12 +298,12 @@ def predict_excel_process(input_file_path, report_type='daily'):
         pipeline_def = joblib.load(model_def_path)
         y_pred_def = pipeline_def.predict(X_pred)
         
-        df_res_def = pd.DataFrame(y_pred_def, columns=TARGETS_DEFECT)
+        df_res_def = pd.DataFrame(y_pred_def, columns=TARGETS_DEFECT, index=df_final.index) # Penting: Pakai index yang sama
         for c in TARGETS_DEFECT: df_final[c] = df_res_def[c]
         
     except Exception as e: return None, f"Error Model Defect: {e}"
 
-    # 4. PREDICT CATEGORY (MONTHLY)
+    # 5. PREDICT CATEGORY (MONTHLY)
     if report_type == 'monthly':
         try:
             model_cat_path = f'{MODEL_DIR}model_oz.pkl'
@@ -267,12 +312,12 @@ def predict_excel_process(input_file_path, report_type='daily'):
             pipeline_cat = joblib.load(model_cat_path)
             y_pred_cat = pipeline_cat.predict(X_pred)
             
-            df_res_cat = pd.DataFrame(y_pred_cat, columns=TARGETS_CATEGORY)
+            df_res_cat = pd.DataFrame(y_pred_cat, columns=TARGETS_CATEGORY, index=df_final.index)
             for c in TARGETS_CATEGORY: df_final[c] = df_res_cat[c]
             
         except Exception as e: return None, f"Error Model Category: {e}"
 
-    # 5. EXPORT & STYLE
+    # 6. EXPORT & STYLE
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_filename = f"RESULT_{report_type.upper()}_{timestamp}.xlsx"
     output_path = os.path.join("datasets", output_filename)
@@ -281,10 +326,9 @@ def predict_excel_process(input_file_path, report_type='daily'):
         writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
         sheet_name = 'Defect Classification' if report_type == 'daily' else 'OZ,MS,IH CATEGORY'
         
-        # --- PERBAIKAN: Buat Sheet dulu sebelum diakses di styling ---
         workbook = writer.book
         worksheet = workbook.add_worksheet(sheet_name)
-        writer.sheets[sheet_name] = worksheet # Registrasi sheet ke writer
+        writer.sheets[sheet_name] = worksheet
         
         apply_custom_layout(writer, df_final, sheet_name, report_type)
         
