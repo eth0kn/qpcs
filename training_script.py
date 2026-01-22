@@ -75,10 +75,6 @@ def find_header_index(file_path, sheet_name, keyword):
     return 1
 
 def prepare_ai_input(df):
-    """
-    Menggabungkan kolom Konteks menjadi satu kalimat panjang untuk AI.
-    Format: [SYMPTOM] [PROC_DETAIL] [REMARK]
-    """
     # Pastikan kolom ada, jika tidak, isi string kosong
     for col in AI_CONTEXT_COLS:
         if col not in df.columns:
@@ -94,7 +90,6 @@ def prepare_ai_input(df):
     return df
 
 def load_and_validate_data(file_path, sheet_name):
-    """Load data untuk TRAINING (Hanya ambil yg valid untuk belajar)"""
     if not os.path.exists(file_path): return pd.DataFrame()
 
     header_idx = find_header_index(file_path, sheet_name, HEADER_KEYWORD)
@@ -256,9 +251,6 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
     report(100, "Training Completed.")
 
 def predict_excel_process(input_file_path, report_type='daily', progress_callback=None):
-    """
-    Versi update dengan Progress Reporting Real-time.
-    """
     import datetime
     
     # Fungsi Helper Laporan Lokal

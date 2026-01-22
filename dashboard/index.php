@@ -213,9 +213,7 @@
 </div>
 
 <script>
-    // --- KONFIGURASI BACKEND ---
-    // Gunakan IP Absolut VPS Anda
-    const API_BASE_URL = "http://13.229.172.201:8000"; 
+    const API_BASE_URL = "http://localost:8000"; 
 
     // --- TABS LOGIC ---
     function switchTab(tab) {
@@ -248,20 +246,13 @@
     function startPolling(contextName) {
         if(pollingInterval) clearInterval(pollingInterval);
         
-        // Interval lebih cepat (500ms) untuk responsivitas
         pollingInterval = setInterval(function() {
-            // Anti-Cache: Tambahkan parameter nocache dengan angka random
             $.ajax({
                 url: API_BASE_URL + "/progress?nocache=" + Math.random(),
                 type: "GET",
                 cache: false,
                 success: function(data) {
-                    console.log("Server Poll:", data); // Debugging di Console
-                    
-                    // FIXED LOGIC:
-                    // Jika data JSON valid, kita update UI.
-                    // Kita tidak peduli apakah is_running true/false, selama ada pesan, kita tampilkan.
-                    // Ini memperbaiki masalah UI Stuck.
+                    console.log("Server Poll:", data);
                     
                     if (data && data.message) {
                          // Hanya update jika pesannya bukan "Idle" (default state)

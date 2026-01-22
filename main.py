@@ -135,11 +135,8 @@ async def run_prediction(
         def update_predict_progress(pct, msg):
             save_state(True, pct, msg)
 
-        # --- PERBAIKAN UTAMA: JALANKAN DI EXECUTOR ---
-        # Ini mencegah Server Hang saat AI bekerja
         loop = asyncio.get_event_loop()
         
-        # Bungkus fungsi dengan argumennya (Tanpa parameter cleansing)
         func = functools.partial(
             predict_excel_process, 
             input_file_path=temp_path, 
@@ -147,10 +144,8 @@ async def run_prediction(
             progress_callback=update_predict_progress
         )
         
-        # Await proses di thread terpisah
         output_path, error_msg = await loop.run_in_executor(None, func)
         
-        # Cleanup
         if os.path.exists(temp_path): os.remove(temp_path)
             
         if not output_path:
