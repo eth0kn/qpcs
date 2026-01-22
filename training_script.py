@@ -50,16 +50,27 @@ def report(progress, message):
     print(f"[PROGRESS {progress}%] {message}")
 
 def find_header_index(file_path, sheet_name, keyword):
+    """
+    Mencari lokasi header (baris ke-berapa) yang mengandung keyword.
+    FIX: Menangani kasus sheet_name=None agar tidak return Dict.
+    """
+    # FIX: Jika sheet_name None, gunakan index 0 (Sheet Pertama)
+    target_sheet = sheet_name if sheet_name is not None else 0
+
     try:
-        # Coba baca sheet spesifik
-        df_temp = pd.read_excel(file_path, sheet_name=sheet_name, header=None, nrows=30)
+        # Baca 30 baris pertama untuk scanning
+        df_temp = pd.read_excel(file_path, sheet_name=target_sheet, header=None, nrows=30)
     except:
-        # Fallback: Coba baca sheet pertama jika sheet name tidak ketemu
         try:
-            df_temp = pd.read_excel(file_path, index_col=None, header=None, nrows=30)
+            # Fallback jika nama sheet salah, paksa index 0
+            df_temp = pd.read_excel(file_path, sheet_name=0, header=None, nrows=30)
         except Exception as e:
             print(f"   ! Gagal baca header: {e}")
             return 1
+
+    # Safety: Jika pandas mengembalikan dict (kasus edge case), ambil value pertama
+    if isinstance(df_temp, dict):
+        df_temp = list(df_temp.values())[0]
 
     for idx, row in df_temp.iterrows():
         row_str = row.astype(str).str.upper().tolist()
@@ -197,8 +208,9 @@ def apply_custom_layout(writer, df, sheet_name, report_type):
     # --- 5. TULIS DATA BODY (ROW 4 dst) ---
     data_start_row = header_row_idx + 1
     
-    # Ubah DF ke list of list agar cepat
-    data_values = df.values.tolist()
+    # Ubah DF ke list of list & handle NaN agar aman ditulis
+    df_clean = df.fillna("")
+    data_values = df_clean.values.tolist()
     
     for r_idx, row_data in enumerate(data_values):
         current_row = data_start_row + r_idx
@@ -218,11 +230,9 @@ def apply_custom_layout(writer, df, sheet_name, report_type):
         svc_col_idx = df.columns.get_loc('SVC TYPE') + START_COL
         
         # Convert index ke huruf excel (misal 5 -> F)
-        # Cara gampang: Range dari row data pertama sampai terakhir
         last_row = data_start_row + len(df) - 1
         
         # Apply Logic
-        # xlsxwriter butuh range (first_row, first_col, last_row, last_col)
         worksheet.conditional_format(data_start_row, svc_col_idx, last_row, svc_col_idx,
                                      {'type': 'cell', 'criteria': 'equal to', 'value': '"IH"', 'format': fmt_ih})
         worksheet.conditional_format(data_start_row, svc_col_idx, last_row, svc_col_idx,
@@ -238,7 +248,6 @@ def apply_custom_layout(writer, df, sheet_name, report_type):
 # ==============================================================================
 
 def train_ai_advanced(enable_cleansing=False, progress_callback=None):
-    # Logika Training Tetap Sama
     global report
     if progress_callback:
         def report(p, m): progress_callback(p, m); print(f"[{p}%] {m}")
@@ -267,7 +276,7 @@ def train_ai_advanced(enable_cleansing=False, progress_callback=None):
 def predict_excel_process(input_file_path, report_type='daily'):
     import datetime
     
-    # 1. LOAD DATA & HEADER
+    # 1. LOAD DATA & HEADER (FIX: Pass None as sheet_name handled in func)
     try:
         header_idx = find_header_index(input_file_path, None, HEADER_KEYWORD)
         df = pd.read_excel(input_file_path, header=header_idx)
@@ -277,19 +286,15 @@ def predict_excel_process(input_file_path, report_type='daily'):
     if HEADER_KEYWORD not in df.columns:
         return None, f"Kolom '{HEADER_KEYWORD}' tidak ditemukan."
 
-    # 2. FILTER & URUTKAN KOLOM (Ambil hanya yg penting)
-    # Kita pastikan kolom yg diminta ada. Jika tidak ada di raw, kita buat kosong.
+    # 2. FILTER & URUTKAN KOLOM
     for col in FINAL_COLUMNS_ORDER:
         if col not in df.columns:
-            df[col] = "" # Isi kosong jika tidak ketemu di raw
+            df[col] = "" 
     
-    # Buat DF baru hanya dengan kolom yg diminta
     df_final = df[FINAL_COLUMNS_ORDER].copy()
-    
-    # 3. PREPARE INPUT AI
     X_pred = df[HEADER_KEYWORD].fillna("").astype(str).tolist()
 
-    # 4. RUN PREDICTION (DEFECT - Selalu jalan)
+    # 3. RUN PREDICTION (DEFECT - Selalu jalan)
     try:
         model_def_path = f'{MODEL_DIR}model_defect.pkl'
         if not os.path.exists(model_def_path): return None, "Model Defect belum ada."
@@ -297,13 +302,12 @@ def predict_excel_process(input_file_path, report_type='daily'):
         pipeline_def = joblib.load(model_def_path)
         y_pred_def = pipeline_def.predict(X_pred)
         
-        # Masukkan hasil ke DF
         df_res_def = pd.DataFrame(y_pred_def, columns=TARGETS_DEFECT)
         for c in TARGETS_DEFECT: df_final[c] = df_res_def[c]
         
     except Exception as e: return None, f"Error Model Defect: {e}"
 
-    # 5. RUN PREDICTION (CATEGORY - Hanya Monthly)
+    # 4. RUN PREDICTION (CATEGORY - Hanya Monthly)
     if report_type == 'monthly':
         try:
             model_cat_path = f'{MODEL_DIR}model_oz.pkl'
@@ -312,31 +316,20 @@ def predict_excel_process(input_file_path, report_type='daily'):
             pipeline_cat = joblib.load(model_cat_path)
             y_pred_cat = pipeline_cat.predict(X_pred)
             
-            # Masukkan hasil ke DF
             df_res_cat = pd.DataFrame(y_pred_cat, columns=TARGETS_CATEGORY)
             for c in TARGETS_CATEGORY: df_final[c] = df_res_cat[c]
             
         except Exception as e: return None, f"Error Model Category: {e}"
 
-    # 6. EXPORT DENGAN LAYOUT KHUSUS
+    # 5. EXPORT DENGAN LAYOUT KHUSUS
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_filename = f"RESULT_{report_type.upper()}_{timestamp}.xlsx"
     output_path = os.path.join("datasets", output_filename)
     
     try:
-        # Gunakan XlsxWriter
         writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
         sheet_name = 'Defect Classification' if report_type == 'daily' else 'OZ,MS,IH CATEGORY'
         
-        # Tulis data ke memory buffer xlsxwriter (tanpa header dulu, header kita lukis manual)
-        # Kita skip penulisan via pandas to_excel biasa agar kita bisa kontrol posisi start row/col
-        # Tapi untuk memudahkan, kita pakai to_excel tapi startrow=3
-        
-        # PENTING: Kita kirim data kosong ke to_excel hanya untuk init sheet, 
-        # lalu kita lukis manual semua isinya di fungsi apply_custom_layout
-        # agar kontrol penuh (pandas to_excel kadang menimpa format).
-        
-        # Cara terbaik: Biarkan fungsi apply_custom_layout menangani penulisan data dan header.
         apply_custom_layout(writer, df_final, sheet_name, report_type)
         
         writer.close()
