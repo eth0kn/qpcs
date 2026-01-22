@@ -97,21 +97,6 @@
         .check-icon { position: absolute; top: 12px; right: 12px; color: var(--primary); display: none; }
         .report-card.active .check-icon { display: block; }
 
-        /* CONFIG BOX (TOGGLE) */
-        .config-box {
-            background: #F9FAFB; border: 1px solid var(--border); border-radius: 12px;
-            padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px;
-        }
-        
-        /* SWITCH STYLE */
-        .switch { position: relative; display: inline-block; width: 46px; height: 24px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #D1D5DB; transition: .4s; border-radius: 34px; }
-        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: var(--success); }
-        input:checked + .slider:before { transform: translateX(22px); }
-        input:disabled + .slider { background-color: #eee; cursor: not-allowed; }
-
         /* BUTTONS */
         .btn-process {
             width: 100%; background-color: var(--primary); color: white; border: none;
@@ -202,19 +187,7 @@
             </div>
         </div>
 
-        <span class="section-label">2. AI Configuration</span>
-        <div class="config-box">
-            <div>
-                <div style="font-weight: 600; font-size:14px;">Deep Process Cleansing</div>
-                <div style="font-size:12px; color: var(--text-sub);">Remove noise (Disabled for RAW Mode).</div>
-            </div>
-            <label class="switch">
-                <input type="checkbox" id="cleanPredict" disabled>
-                <span class="slider"></span>
-            </label>
-        </div>
-
-        <span class="section-label">3. Upload File</span>
+        <span class="section-label">2. Upload File</span>
         <input name="filePredict" id="filePredict" type="file" />
 
         <button id="btnPredict" class="btn-process" disabled>
@@ -227,19 +200,7 @@
             <b>Admin Area:</b> Upload master data to retrain the AI models. This process may take a few minutes.
         </div>
 
-        <span class="section-label">1. Training Configuration</span>
-        <div class="config-box">
-            <div>
-                <div style="font-weight: 600; font-size:14px;">Deep Training Cleansing</div>
-                <div style="font-size:12px; color: var(--text-sub);">Remove noise from data [Recommended ON].</div>
-            </div>
-            <label class="switch">
-                <input type="checkbox" id="cleanTrain" checked>
-                <span class="slider"></span>
-            </label>
-        </div>
-
-        <span class="section-label">2. Upload Master Data</span>
+        <span class="section-label">1. Upload Master Data</span>
         <input name="fileTrain" id="fileTrain" type="file" />
 
         <button id="btnTrain" class="btn-process btn-train" disabled>
@@ -264,7 +225,6 @@
 
 <script>
     // --- KONFIGURASI BACKEND ---
-    // Gunakan IP Absolut agar bisa diakses dari device lain
     const API_BASE_URL = "http://13.229.172.201:8000"; 
 
     // --- TABS LOGIC ---
@@ -299,16 +259,17 @@
         if(pollingInterval) clearInterval(pollingInterval);
         
         pollingInterval = setInterval(function() {
-            // Gunakan endpoint /progress yang sudah kita buat di backend
-            // Tambahkan timestamp (?t=) agar browser tidak cache data lama
+            // Gunakan endpoint /progress + timestamp
             $.ajax({
                 url: API_BASE_URL + "/progress?t=" + new Date().getTime(),
                 type: "GET",
                 cache: false,
                 success: function(data) {
-                    console.log("Status:", data);
+                    // console.log("Status:", data);
                     
-                    if(data.is_running || data.progress > 0) {
+                    // FIXED: Hanya update UI jika is_running === true
+                    // Ini mencegah UI menampilkan "100%" yang tertinggal dari proses sebelumnya
+                    if(data.is_running === true) {
                         $("#modalTitle").text(contextName + ": " + data.progress + "%");
                         $("#modalSub").text(data.message);
                     }
@@ -362,8 +323,6 @@
             if (files.length === 0) return;
 
             var reportType = $("input[name='reportType']:checked").val();
-            // Force false cleansing for Predict as requested
-            var isClean = "false"; 
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
 
@@ -373,10 +332,13 @@
             $("#modalTitle").text("Connecting...");
             $("#modalSub").text("Uploading file...");
 
-            startPolling("Processing"); // Start polling immediately
+            // CLEANED: Tunda polling 2 detik & Tidak ada parameter isClean
+            setTimeout(function() {
+                startPolling("Processing");
+            }, 2000);
 
-            // 2. Fetch Request
-            fetch(API_BASE_URL + "/predict?report_type=" + reportType + "&enable_cleansing=" + isClean, { 
+            // 2. Fetch Request (CLEAN URL)
+            fetch(API_BASE_URL + "/predict?report_type=" + reportType, { 
                 method: "POST", 
                 body: formData 
             })
@@ -407,7 +369,6 @@
 
             if(!confirm("Start Retraining? This will take 5-10 minutes.")) return;
 
-            var isClean = $("#cleanTrain").is(":checked") ? "true" : "false";
             var formData = new FormData();
             formData.append("file", files[0].rawFile);
 
@@ -417,11 +378,10 @@
             $("#modalTitle").text("Retraining AI...");
             $("#modalSub").text("Initializing...");
 
-            // 2. Trigger Start
-            fetch(API_BASE_URL + "/train?enable_cleansing=" + isClean, { method: "POST", body: formData })
+            // 2. Trigger Start (CLEAN URL)
+            fetch(API_BASE_URL + "/train", { method: "POST", body: formData })
             .then(res => res.json())
             .then(data => {
-                // Backend sudah start thread, kita pantau via Polling
                 startPolling("Training");
             })
             .catch(err => {
