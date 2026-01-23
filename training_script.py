@@ -23,7 +23,7 @@ AI_BATCH_SIZE = 256
 # ==============================================================================
 # PRELOAD MODEL (NEW – OFFLINE & SINGLETON)
 # ==============================================================================
-print(f"🔄 Loading SentenceTransformer snapshot: {SNAPSHOT}")
+print(f"🔄 Loading SentenceTransformer snapshot: {MODEL_PATH}")
 EMBEDDER = SentenceTransformer(
     MODEL_PATH,
     device="cpu",
