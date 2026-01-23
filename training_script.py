@@ -26,11 +26,10 @@ AI_BATCH_SIZE = 256
 # PRELOAD MODEL (NEW – OFFLINE & SINGLETON)
 # ==============================================================================
 print(f"🔄 Loading SentenceTransformer snapshot: {SNAPSHOT}")
-EMBEDDER = SentenceTransformer.from_pretrained(
+EMBEDDER = SentenceTransformer(
     MODEL_PATH,
     device="cpu",
-    local_files_only=True,
-    trust_remote_code=True
+    local_files_only=True
 )
 print("✅ SentenceTransformer loaded")
 
