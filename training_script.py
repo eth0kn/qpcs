@@ -13,9 +13,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 # PATH & CPU CONFIG (NEW)
 # ==============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_ROOT = os.path.join(BASE_DIR, "models", "bge-m3", "snapshots")
-SNAPSHOT = sorted(os.listdir(MODEL_ROOT))[-1]   # auto-latest snapshot
-MODEL_PATH = os.path.join(MODEL_ROOT, SNAPSHOT)
+MODEL_PATH = os.path.join(BASE_DIR, "models_export", "bge-m3")
 
 torch.set_num_threads(8)
 os.environ["OMP_NUM_THREADS"] = "8"
