@@ -13,7 +13,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 # PATH & CPU CONFIG (NEW)
 # ==============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "models_export", "bge-m3")
+MODEL_PATH = os.path.join(BASE_DIR, "models-export", "bge-m3")
 
 torch.set_num_threads(8)
 os.environ["OMP_NUM_THREADS"] = "8"
@@ -23,7 +23,7 @@ AI_BATCH_SIZE = 256
 # ==============================================================================
 # PRELOAD MODEL (NEW – OFFLINE & SINGLETON)
 # ==============================================================================
-print(f"🔄 Loading SentenceTransformer snapshot: {MODEL_PATH}")
+print(f"🔄 Loading SentenceTransformer model from: {MODEL_PATH}")
 EMBEDDER = SentenceTransformer(
     MODEL_PATH,
     device="cpu",
