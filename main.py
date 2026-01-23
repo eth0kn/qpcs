@@ -1,72 +1,53 @@
 from fastapi import FastAPI, UploadFile, File
-import tempfile
+from fastapi.middleware.cors import CORSMiddleware
+import shutil
 import os
-import threading
 
-from training_script import (
-    train_ai_advanced,
-    predict_excel_process
-)
+from training_script import train_ai_advanced, predict_excel_process
 
 app = FastAPI(title="QPCS AI Backend")
 
-# =============================================================================
-# TRAIN STATE
-# =============================================================================
-training_state = {
-    "running": False,
-    "progress": 0,
-    "message": ""
-}
+# ==============================================================================
+# CORS (WAJIB BIAR FRONTEND GA FAIL)
+# ==============================================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-def progress_callback(p, m):
-    training_state["progress"] = p
-    training_state["message"] = m
-
-
-# =============================================================================
-# HEALTH
-# =============================================================================
 @app.get("/")
-def health():
+def root():
     return {"status": "ok"}
 
 
-# =============================================================================
-# TRAIN (THREAD SAFE)
-# =============================================================================
 @app.post("/train")
 def train():
-    if training_state["running"]:
-        return {"status": "already running"}
-
-    def run():
-        training_state["running"] = True
-        try:
-            train_ai_advanced(progress_callback=progress_callback)
-        finally:
-            training_state["running"] = False
-
-    threading.Thread(target=run, daemon=True).start()
-    return {"status": "training started"}
+    train_ai_advanced()
+    return {"status": "training completed"}
 
 
-@app.get("/progress")
-def progress():
-    return training_state
-
-
-# =============================================================================
-# PREDICT
-# =============================================================================
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+def predict(file: UploadFile = File(...)):
+    input_path = os.path.join(UPLOAD_DIR, file.filename)
+    output_path = os.path.join(OUTPUT_DIR, f"RESULT_{file.filename}")
 
-    try:
-        return predict_excel_process(tmp_path)
-    finally:
-        os.unlink(tmp_path)
+    with open(input_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    predict_excel_process(input_path, output_path)
+
+    return {
+        "status": "success",
+        "output_file": output_path
+    }
